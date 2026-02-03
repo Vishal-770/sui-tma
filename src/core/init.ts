@@ -70,10 +70,21 @@ export async function init(options: {
   initData.restore();
 
   try {
-    miniApp.mount();
+    themeParams.mount();
     themeParams.bindCssVars();
   } catch (e) {
+    // themeParams not available
+    console.log('themeParams not available');
+  }
+
+  try {
+    miniApp.mount();
+    miniApp.bindCssVars();
+    // Signal that the app is ready
+    miniApp.ready();
+  } catch (e) {
     // miniApp not available
+    console.log('miniApp not available');
   }
 
   try {

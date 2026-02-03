@@ -1,5 +1,5 @@
 {
-  "name": "nextjs-template",
+  "name": "sui-tma",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -10,12 +10,12 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@mysten/sui": "^2.1.0",
     "@telegram-apps/telegram-ui": "^2.1.13",
     "@tma.js/sdk-react": "^3.0.11",
-    "@tonconnect/ui-react": "^2.3.1",
     "eruda": "^3.4.3",
+    "jwt-decode": "^4.0.0",
     "next": "16.0.7",
-    "next-intl": "^4.5.5",
     "normalize.css": "^8.0.1",
     "react": "^19",
     "react-dom": "^19"
