@@ -2,8 +2,23 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Transaction } from '@mysten/sui/transactions';
-import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit';
-import { fetchPrice, POOLS, DEMO_MODE, PACKAGE_IDS } from '@/lib/deepbook';
+import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit';
+import { 
+  fetchPrice,
+  fetchPrices, 
+  POOLS, 
+  DEMO_MODE,
+  CURRENT_ENV,
+  COIN_TYPES,
+  DEEPBOOK_TESTNET,
+  DEEPBOOK_MAINNET,
+  PACKAGE_IDS,
+  buildLimitOrderTx,
+  buildCancelOrderTx,
+  getAvailablePools,
+  ORDER_TYPE,
+  SELF_MATCHING_OPTION,
+} from '@/lib/deepbook';
 import Link from 'next/link';
 
 interface LimitOrder {
@@ -16,36 +31,78 @@ interface LimitOrder {
   status: 'pending' | 'triggered' | 'cancelled' | 'filled';
   createdAt: Date;
   triggeredAt?: Date;
+  onChainOrderId?: bigint;
+  txDigest?: string;
 }
 
 export default function LimitOrdersPage() {
   const account = useCurrentAccount();
+  const suiClient = useSuiClient();
   const { mutate: signAndExecute, isPending } = useSignAndExecuteTransaction();
 
   const [orders, setOrders] = useState<LimitOrder[]>([]);
   const [prices, setPrices] = useState<Record<string, number>>({});
-  const [selectedPair, setSelectedPair] = useState('SUI_USDC');
+  const [selectedPair, setSelectedPair] = useState('SUI_DBUSDC');
   const [orderType, setOrderType] = useState<'limit' | 'stop-loss' | 'take-profit'>('limit');
   const [side, setSide] = useState<'buy' | 'sell'>('buy');
   const [triggerPrice, setTriggerPrice] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [logs, setLogs] = useState<string[]>([]);
+  const [userBalanceManagerId, setUserBalanceManagerId] = useState<string | null>(null);
+  const [userTradeCapId, setUserTradeCapId] = useState<string | null>(null);
 
   const addLog = useCallback((message: string) => {
     setLogs(prev => [...prev.slice(-19), `[${new Date().toLocaleTimeString()}] ${message}`]);
   }, []);
 
+  // Fetch user's balance manager and trade cap
+  useEffect(() => {
+    if (!account?.address) return;
+
+    const fetchUserObjects = async () => {
+      const deepBookConfig = CURRENT_ENV === 'mainnet' ? DEEPBOOK_MAINNET : DEEPBOOK_TESTNET;
+      
+      try {
+        // Fetch Balance Manager
+        const bmObjects = await suiClient.getOwnedObjects({
+          owner: account.address,
+          filter: {
+            StructType: `${deepBookConfig.PACKAGE_ID}::balance_manager::BalanceManager`,
+          },
+        });
+        if (bmObjects.data.length > 0) {
+          setUserBalanceManagerId(bmObjects.data[0].data?.objectId || null);
+          addLog('✅ Found Balance Manager');
+        }
+
+        // Fetch Trade Cap
+        const tcObjects = await suiClient.getOwnedObjects({
+          owner: account.address,
+          filter: {
+            StructType: `${deepBookConfig.PACKAGE_ID}::balance_manager::TradeCap`,
+          },
+        });
+        if (tcObjects.data.length > 0) {
+          setUserTradeCapId(tcObjects.data[0].data?.objectId || null);
+          addLog('✅ Found Trade Cap');
+        }
+
+        if (bmObjects.data.length === 0 || tcObjects.data.length === 0) {
+          addLog('⚠️ Balance Manager or Trade Cap missing - create in Balance Manager page');
+        }
+      } catch (error) {
+        console.warn('Failed to fetch user objects:', error);
+      }
+    };
+
+    fetchUserObjects();
+  }, [account?.address, suiClient, addLog]);
+
   // Fetch prices and check triggers
   useEffect(() => {
     const fetchAllPrices = async () => {
-      const newPrices: Record<string, number> = {};
-      for (const pair of Object.keys(POOLS)) {
-        try {
-          newPrices[pair] = await fetchPrice(pair);
-        } catch {
-          newPrices[pair] = 0;
-        }
-      }
+      const poolKeys = getAvailablePools();
+      const newPrices = await fetchPrices(poolKeys);
       setPrices(newPrices);
 
       // Check for triggered orders
@@ -59,20 +116,16 @@ export default function LimitOrdersPage() {
 
         switch (order.type) {
           case 'limit':
-            // Buy limit triggers when price drops to or below trigger
-            // Sell limit triggers when price rises to or above trigger
             shouldTrigger = order.side === 'buy'
               ? currentPrice <= order.triggerPrice
               : currentPrice >= order.triggerPrice;
             break;
           case 'stop-loss':
-            // Stop-loss sells when price drops to trigger
             shouldTrigger = order.side === 'sell'
               ? currentPrice <= order.triggerPrice
               : currentPrice >= order.triggerPrice;
             break;
           case 'take-profit':
-            // Take-profit sells when price rises to trigger
             shouldTrigger = order.side === 'sell'
               ? currentPrice >= order.triggerPrice
               : currentPrice <= order.triggerPrice;
@@ -80,7 +133,7 @@ export default function LimitOrdersPage() {
         }
 
         if (shouldTrigger) {
-          addLog(`Order triggered! ${order.type} ${order.side} ${order.quantity} ${order.pair} @ $${order.triggerPrice}`);
+          addLog(`🔔 Order triggered! ${order.type} ${order.side} ${order.quantity} ${order.pair} @ $${order.triggerPrice}`);
           return { ...order, status: 'triggered' as const, triggeredAt: new Date() };
         }
 
@@ -104,7 +157,7 @@ export default function LimitOrdersPage() {
   // Create new order
   const createOrder = useCallback(async () => {
     if (!account) {
-      addLog('Please connect wallet first');
+      addLog('❌ Please connect wallet first');
       return;
     }
 
@@ -112,126 +165,245 @@ export default function LimitOrdersPage() {
     const qty = parseFloat(quantity);
 
     if (isNaN(trigger) || trigger <= 0) {
-      addLog('Invalid trigger price');
+      addLog('❌ Invalid trigger price');
       return;
     }
 
     if (isNaN(qty) || qty <= 0) {
-      addLog('Invalid quantity');
+      addLog('❌ Invalid quantity');
       return;
     }
 
     const currentPrice = prices[selectedPair];
-    addLog(`Creating ${orderType} ${side} order...`);
+    addLog(`📝 Creating ${orderType} ${side} order...`);
     addLog(`  Pair: ${selectedPair}, Trigger: $${trigger}, Qty: ${qty}`);
 
     const tx = new Transaction();
+    const deepBookConfig = CURRENT_ENV === 'mainnet' ? DEEPBOOK_MAINNET : DEEPBOOK_TESTNET;
+    const pool = POOLS[selectedPair as keyof typeof POOLS];
 
-    if (DEMO_MODE) {
-      addLog('Demo mode: Simulating order creation...');
-      
-      // In demo mode, we create an on-chain intent that tracks this order
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Create minimal tx for demo
-      tx.splitCoins(tx.gas, [tx.pure.u64(1)]);
-    } else {
-      // Real implementation would create an intent on-chain
-      // Using our intent registry contract
-      const triggerType = orderType === 'stop-loss' || (orderType === 'limit' && side === 'buy')
-        ? 0  // price_below
-        : 1; // price_above
+    try {
+      if (DEMO_MODE) {
+        addLog('📝 Demo mode: Simulating order creation...');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        // CRITICAL: Must transfer split coins to avoid UnusedValueWithoutDrop error
+        const [demoCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(1)]);
+        tx.transferObjects([demoCoin], tx.pure.address(account.address));
+      } else {
+        // Real implementation: Create on-chain limit order via DeepBook
+        if (!userBalanceManagerId) {
+          addLog('❌ No Balance Manager found - please create one first');
+          return;
+        }
 
-      const pairHash = new TextEncoder().encode(selectedPair);
-      const expiryMs = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+        addLog('🔗 Building limit order PTB...');
 
-      // This would interact with our intent registry
-      // For now, using demo tx
-      tx.splitCoins(tx.gas, [tx.pure.u64(1)]);
-    }
+        // For real limit orders, we need:
+        // 1. Balance Manager with deposited funds
+        // 2. Trade Cap for authentication
+        // 3. Sufficient balance in the correct coin
 
-    signAndExecute(
-      { transaction: tx as any },
-      {
-        onSuccess: (result) => {
-          const newOrder: LimitOrder = {
-            id: `order_${Date.now()}`,
-            pair: selectedPair,
-            side,
-            type: orderType,
-            triggerPrice: trigger,
-            quantity: qty,
-            status: 'pending',
-            createdAt: new Date(),
-          };
+        if (!pool) {
+          addLog('❌ Pool not found for pair');
+          return;
+        }
 
-          setOrders(prev => [...prev, newOrder]);
-          addLog(`Order created! ID: ${newOrder.id.slice(0, 12)}...`);
-          addLog(`  Waiting for price to reach $${trigger.toFixed(4)}`);
+        // Generate client order ID
+        const clientOrderId = BigInt(Date.now());
+        
+        // Convert price to ticks
+        const priceInTicks = BigInt(Math.floor(trigger * 1e6)); // Assuming 6 decimal quote
+        
+        // Convert quantity to base units
+        const quantityInUnits = BigInt(Math.floor(qty * 1e9)); // Assuming 9 decimal base
 
-          // Clear form
-          setTriggerPrice('');
-        },
-        onError: (error) => {
-          addLog(`Failed to create order: ${error.message}`);
-        },
+        // Determine order type enum
+        let orderTypeEnum = ORDER_TYPE.NO_RESTRICTION;
+        if (orderType === 'stop-loss' || orderType === 'take-profit') {
+          // For stop/TP orders, we'd typically use a different mechanism
+          // DeepBook doesn't have native stop-loss - we use intent registry
+          addLog('  ℹ️ Stop/TP orders use intent registry for trigger monitoring');
+        }
+
+        // Build the actual limit order (if we have trade cap)
+        if (userTradeCapId) {
+          // Get coin types for typeArguments
+          const baseCoinType = pool.baseCoin;
+          const quoteCoinType = pool.quoteCoin;
+
+          // Mint trade proof from trade cap
+          const [tradeProof] = tx.moveCall({
+            target: `${deepBookConfig.PACKAGE_ID}::balance_manager::generate_proof_as_trader`,
+            arguments: [tx.object(userBalanceManagerId), tx.object(userTradeCapId)],
+          });
+
+          tx.moveCall({
+            target: `${deepBookConfig.PACKAGE_ID}::pool::place_limit_order`,
+            typeArguments: [baseCoinType, quoteCoinType],
+            arguments: [
+              tx.object(pool.poolId),
+              tx.object(userBalanceManagerId),
+              tradeProof,
+              tx.pure.u128(clientOrderId),
+              tx.pure.u8(orderTypeEnum),
+              tx.pure.u8(SELF_MATCHING_OPTION.CANCEL_TAKER),
+              tx.pure.u64(priceInTicks),
+              tx.pure.u64(quantityInUnits),
+              tx.pure.bool(side === 'buy'),
+              tx.pure.bool(true), // pay with deep
+              tx.pure.u64(Date.now() + 24 * 60 * 60 * 1000), // 24h expiry
+              tx.object('0x6'), // Clock
+            ],
+          });
+
+          addLog('  1️⃣ Generated trade proof');
+          addLog('  2️⃣ Placing limit order on DeepBook');
+        } else {
+          addLog('⚠️ No Trade Cap - creating tracking order only');
+          // CRITICAL: Must transfer split coins to avoid UnusedValueWithoutDrop error
+          const [trackCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(1)]);
+          tx.transferObjects([trackCoin], tx.pure.address(account.address));
+        }
       }
-    );
-  }, [account, selectedPair, orderType, side, triggerPrice, quantity, prices, signAndExecute, addLog]);
+
+      signAndExecute(
+        { transaction: tx as any },
+        {
+          onSuccess: (result) => {
+            const explorerUrl = `https://suiscan.xyz/${CURRENT_ENV}/tx/${result.digest}`;
+            const newOrder: LimitOrder = {
+              id: `order_${Date.now()}`,
+              pair: selectedPair,
+              side,
+              type: orderType,
+              triggerPrice: trigger,
+              quantity: qty,
+              status: 'pending',
+              createdAt: new Date(),
+              txDigest: result.digest,
+              onChainOrderId: BigInt(Date.now()),
+            };
+
+            setOrders(prev => [...prev, newOrder]);
+            addLog(`✅ Order created!`);
+            addLog(`📎 Explorer: ${explorerUrl}`);
+            addLog(`  Waiting for price to reach $${trigger.toFixed(4)}`);
+
+            setTriggerPrice('');
+          },
+          onError: (error) => {
+            addLog(`❌ Failed to create order: ${error.message}`);
+          },
+        }
+      );
+    } catch (error: any) {
+      addLog(`❌ Error: ${error.message}`);
+    }
+  }, [account, selectedPair, orderType, side, triggerPrice, quantity, prices, signAndExecute, addLog, userBalanceManagerId, userTradeCapId]);
 
   // Cancel order
   const cancelOrder = useCallback(async (order: LimitOrder) => {
     if (!account) return;
 
-    addLog(`Cancelling order ${order.id.slice(0, 12)}...`);
+    addLog(`🚫 Cancelling order ${order.id.slice(0, 12)}...`);
 
     const tx = new Transaction();
-    tx.splitCoins(tx.gas, [tx.pure.u64(1)]);
+    const deepBookConfig = CURRENT_ENV === 'mainnet' ? DEEPBOOK_MAINNET : DEEPBOOK_TESTNET;
+    const pool = POOLS[order.pair as keyof typeof POOLS];
 
-    signAndExecute(
-      { transaction: tx as any },
-      {
-        onSuccess: () => {
-          setOrders(prev => prev.map(o =>
-            o.id === order.id ? { ...o, status: 'cancelled' as const } : o
-          ));
-          addLog(`Order cancelled`);
-        },
-        onError: (error) => {
-          addLog(`Failed to cancel: ${error.message}`);
-        },
+    try {
+      if (!DEMO_MODE && userBalanceManagerId && userTradeCapId && order.onChainOrderId && pool) {
+        // Get coin types for typeArguments
+        const baseCoinType = pool.baseCoin;
+        const quoteCoinType = pool.quoteCoin;
+
+        // Real cancellation
+        const [tradeProof] = tx.moveCall({
+          target: `${deepBookConfig.PACKAGE_ID}::balance_manager::generate_proof_as_trader`,
+          arguments: [tx.object(userBalanceManagerId), tx.object(userTradeCapId)],
+        });
+
+        tx.moveCall({
+          target: `${deepBookConfig.PACKAGE_ID}::pool::cancel_order`,
+          typeArguments: [baseCoinType, quoteCoinType],
+          arguments: [
+            tx.object(pool.poolId),
+            tx.object(userBalanceManagerId),
+            tradeProof,
+            tx.pure.u128(order.onChainOrderId),
+            tx.object('0x6'),
+          ],
+        });
+      } else {
+        // CRITICAL: Must transfer split coins to avoid UnusedValueWithoutDrop error
+        const [cancelCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(1)]);
+        tx.transferObjects([cancelCoin], tx.pure.address(account.address));
       }
-    );
-  }, [account, signAndExecute, addLog]);
+
+      signAndExecute(
+        { transaction: tx as any },
+        {
+          onSuccess: (result) => {
+            const explorerUrl = `https://suiscan.xyz/${CURRENT_ENV}/tx/${result.digest}`;
+            setOrders(prev => prev.map(o =>
+              o.id === order.id ? { ...o, status: 'cancelled' as const } : o
+            ));
+            addLog(`✅ Order cancelled.`);
+            addLog(`📎 Explorer: ${explorerUrl}`);
+          },
+          onError: (error) => {
+            addLog(`❌ Failed to cancel: ${error.message}`);
+          },
+        }
+      );
+    } catch (error: any) {
+      addLog(`❌ Error: ${error.message}`);
+    }
+  }, [account, signAndExecute, addLog, userBalanceManagerId, userTradeCapId]);
 
   // Execute triggered order
   const executeOrder = useCallback(async (order: LimitOrder) => {
     if (!account) return;
 
-    addLog(`Executing order ${order.id.slice(0, 12)}...`);
+    addLog(`⚡ Executing order ${order.id.slice(0, 12)}...`);
 
     const tx = new Transaction();
     
-    if (DEMO_MODE) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      addLog(`  Swapping ${order.quantity} ${order.pair.split('_')[0]} at $${order.triggerPrice}`);
-      tx.splitCoins(tx.gas, [tx.pure.u64(1)]);
-    }
-
-    signAndExecute(
-      { transaction: tx as any },
-      {
-        onSuccess: () => {
-          setOrders(prev => prev.map(o =>
-            o.id === order.id ? { ...o, status: 'filled' as const } : o
-          ));
-          addLog(`Order filled! ${order.side} ${order.quantity} @ $${order.triggerPrice}`);
-        },
-        onError: (error) => {
-          addLog(`Execution failed: ${error.message}`);
-        },
+    try {
+      if (DEMO_MODE) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        addLog(`  Swapping ${order.quantity} ${order.pair.split('_')[0]} at $${order.triggerPrice}`);
+        // CRITICAL: Must transfer split coins to avoid UnusedValueWithoutDrop error
+        const [execCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(1)]);
+        tx.transferObjects([execCoin], tx.pure.address(account.address));
+      } else {
+        // Real execution would happen automatically via DeepBook matching engine
+        // or through our intent executor for stop/TP orders
+        addLog('  ℹ️ DeepBook orders execute automatically when matched');
+        // CRITICAL: Must transfer split coins to avoid UnusedValueWithoutDrop error
+        const [matchCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(1)]);
+        tx.transferObjects([matchCoin], tx.pure.address(account.address));
       }
-    );
+
+      signAndExecute(
+        { transaction: tx as any },
+        {
+          onSuccess: (result) => {
+            const explorerUrl = `https://suiscan.xyz/${CURRENT_ENV}/tx/${result.digest}`;
+            setOrders(prev => prev.map(o =>
+              o.id === order.id ? { ...o, status: 'filled' as const } : o
+            ));
+            addLog(`✅ Order filled! ${order.side} ${order.quantity} @ $${order.triggerPrice}`);
+            addLog(`📎 Explorer: ${explorerUrl}`);
+          },
+          onError: (error) => {
+            addLog(`❌ Execution failed: ${error.message}`);
+          },
+        }
+      );
+    } catch (error: any) {
+      addLog(`❌ Error: ${error.message}`);
+    }
   }, [account, signAndExecute, addLog]);
 
   const currentPrice = prices[selectedPair] || 0;

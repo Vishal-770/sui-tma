@@ -12,8 +12,9 @@
   },
   "dependencies": {
     "@mysten/dapp-kit": "^0.14.0",
+    "@mysten/deepbook-v3": "^1.0.3",
     "@mysten/seal": "^1.0.0",
-    "@mysten/sui": "^2.1.0",
+    "@mysten/sui": "^2.2.0",
     "@tanstack/react-query": "^5.0.0",
     "@telegram-apps/telegram-ui": "^2.1.13",
     "@tma.js/sdk-react": "^3.0.11",
