@@ -205,8 +205,8 @@ export function createTradingBot(token: string): Bot<BotContext> {
     }),
   }));
 
-  // Mini App URL
-  const MINI_APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://sui-tma.vercel.app';
+  // Mini App URL - for Telegram Mini App redirects
+  const MINI_APP_URL = process.env.NEXT_PUBLIC_TELEGRAM_MINI_APP_URL || 'https://t.me/DeepIntentBot/app';
 
   // /start command
   bot.command('start', async (ctx) => {

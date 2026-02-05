@@ -10,7 +10,8 @@ import { NextRequest, NextResponse } from 'next/server';
 // Check if we have a token configured
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BOT_ENABLED = Boolean(TELEGRAM_TOKEN);
-const MINI_APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://sui-tma.vercel.app';
+// Mini App URL - for Telegram Mini App redirects
+const MINI_APP_URL = process.env.NEXT_PUBLIC_TELEGRAM_MINI_APP_URL || 'https://t.me/DeepIntentBot/app';
 
 // Mock price data
 const MOCK_PRICES: Record<string, number> = {
