@@ -69,7 +69,7 @@ export default function BalanceManagerPage() {
   const [userBalances, setUserBalances] = useState<Record<string, string>>({});
   
   // Network info
-  const networkEmoji = CURRENT_ENV === 'mainnet' ? '🌐' : '🧪';
+  const networkLabel = CURRENT_ENV === 'mainnet' ? 'Mainnet' : 'Testnet';
   const networkName = CURRENT_ENV === 'mainnet' ? 'Mainnet' : 'Testnet';
   const deepBookConfig = CURRENT_ENV === 'mainnet' ? DEEPBOOK_MAINNET : DEEPBOOK_TESTNET;
 
@@ -428,13 +428,13 @@ export default function BalanceManagerPage() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
-            🏦 Balance Manager
+            Balance Manager
           </h1>
           <p className="text-gray-400">
             Manage your DeepBook V3 trading account
           </p>
           <div className="inline-flex items-center gap-2 mt-2 px-3 py-1 bg-slate-800/50 rounded-full">
-            <span>{networkEmoji}</span>
+            <span className="text-sm text-gray-300">{networkLabel}</span>
             <span className="text-sm text-gray-300">{networkName}</span>
           </div>
         </div>
@@ -454,12 +454,12 @@ export default function BalanceManagerPage() {
         {/* Error/Success Messages */}
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 mb-6">
-            <p className="text-red-400 text-sm">❌ {error}</p>
+            <p className="text-red-400 text-sm">{error}</p>
           </div>
         )}
         {success && (
           <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-4 mb-6">
-            <p className="text-green-400 text-sm">✅ {success}</p>
+            <p className="text-green-400 text-sm">{success}</p>
           </div>
         )}
 
@@ -475,7 +475,7 @@ export default function BalanceManagerPage() {
           <>
             {/* User Wallet Balances */}
             <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-xl p-6 mb-6">
-              <h2 className="text-xl font-semibold text-white mb-4">💰 Your Wallet Balances</h2>
+              <h2 className="text-xl font-semibold text-white mb-4">Your Wallet Balances</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 {Object.entries(userBalances).map(([coin, balance]) => (
                   <div key={coin} className="bg-slate-700/50 rounded-lg p-4">
@@ -488,7 +488,7 @@ export default function BalanceManagerPage() {
 
             {/* Balance Manager Section */}
             <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-xl p-6 mb-6">
-              <h2 className="text-xl font-semibold text-white mb-4">🏦 Balance Manager</h2>
+              <h2 className="text-xl font-semibold text-white mb-4">Balance Manager</h2>
               
               {!balanceManager ? (
                 <div className="text-center py-8">
@@ -517,7 +517,7 @@ export default function BalanceManagerPage() {
                 <div>
                   <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 mb-4">
                     <p className="text-green-400 text-sm">
-                      ✅ Balance Manager Active
+                      Balance Manager Active
                     </p>
                     <p className="text-gray-400 text-xs mt-1 font-mono">
                       ID: {balanceManager.objectId.slice(0, 16)}...{balanceManager.objectId.slice(-8)}
@@ -610,7 +610,7 @@ export default function BalanceManagerPage() {
                           {cap.objectId.slice(0, 12)}...{cap.objectId.slice(-8)}
                         </p>
                       </div>
-                      <span className="text-green-400 text-sm">✅ Active</span>
+                      <span className="text-green-400 text-sm">Active</span>
                     </div>
                   ))}
                 </div>
@@ -647,31 +647,31 @@ export default function BalanceManagerPage() {
 
             {/* Info Section */}
             <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-xl p-6">
-              <h2 className="text-xl font-semibold text-white mb-4">ℹ️ How It Works</h2>
+              <h2 className="text-xl font-semibold text-white mb-4">How It Works</h2>
               <div className="space-y-4 text-gray-400 text-sm">
                 <div className="flex gap-3">
-                  <span className="text-2xl">1️⃣</span>
+                  <span className="text-lg font-semibold text-sky-400">1.</span>
                   <div>
                     <p className="text-white font-medium">Create Balance Manager</p>
                     <p>Your personal trading account on DeepBook V3.</p>
                   </div>
                 </div>
                 <div className="flex gap-3">
-                  <span className="text-2xl">2️⃣</span>
+                  <span className="text-lg font-semibold text-sky-400">2.</span>
                   <div>
                     <p className="text-white font-medium">Mint Trade Caps</p>
                     <p>Authorize trading on specific pools (SUI/USDC, DEEP/SUI, etc.).</p>
                   </div>
                 </div>
                 <div className="flex gap-3">
-                  <span className="text-2xl">3️⃣</span>
+                  <span className="text-lg font-semibold text-sky-400">3.</span>
                   <div>
                     <p className="text-white font-medium">Deposit Funds</p>
                     <p>Move tokens into your Balance Manager for trading.</p>
                   </div>
                 </div>
                 <div className="flex gap-3">
-                  <span className="text-2xl">4️⃣</span>
+                  <span className="text-lg font-semibold text-sky-400">4.</span>
                   <div>
                     <p className="text-white font-medium">Start Trading</p>
                     <p>Place limit orders, market orders, and use flash loans!</p>
@@ -686,25 +686,25 @@ export default function BalanceManagerPage() {
                 href="/demo/swap"
                 className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-all"
               >
-                🔄 Swap
+                Swap
               </a>
               <a
                 href="/demo/limit-orders"
                 className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-all"
               >
-                📊 Limit Orders
+                Limit Orders
               </a>
               <a
                 href="/demo/margin-trading"
                 className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-all"
               >
-                📈 Margin Trading
+                Margin Trading
               </a>
               <a
                 href="/demo/flash-arbitrage"
                 className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-all"
               >
-                ⚡ Flash Arbitrage
+                Flash Arbitrage
               </a>
             </div>
           </>

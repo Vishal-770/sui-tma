@@ -263,8 +263,8 @@ export default function CreateIntentPage() {
                 </svg>
                 <span style={{ fontWeight: 600, fontSize: 14 }}>
                   {encryptionResult.verification.isRealEncryption 
-                    ? '🔒 Seal Encryption Active' 
-                    : '⚠️ Mock Encryption (Dev Mode)'}
+                    ? 'Seal Encryption Active' 
+                    : '[WARN] Mock Encryption (Dev Mode)'}
                 </span>
               </div>
               

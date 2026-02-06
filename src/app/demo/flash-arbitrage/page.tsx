@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Transaction, coinWithBalance } from '@mysten/sui/transactions';
+import type { TransactionObjectArgument } from '@mysten/sui/transactions';
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit';
 import Link from 'next/link';
 import {
@@ -99,7 +100,7 @@ export default function FlashArbitragePage() {
 
   // Generate demo opportunities
   const scanOpportunities = useCallback(() => {
-    addLog('🔍 Scanning for arbitrage opportunities...');
+    addLog('Scanning for arbitrage opportunities...');
     
     const opps: ArbitrageOpportunity[] = [];
     
@@ -148,30 +149,30 @@ export default function FlashArbitragePage() {
     
     setOpportunities(opps.slice(0, 5)); // Top 5
     addLog(`Found ${opps.length} potential arbitrage paths`);
-    addLog('⚠️ Note: Testnet pools often have no liquidity');
+    addLog('[WARN] Note: Testnet pools often have no liquidity');
   }, [availablePools, addLog]);
 
   // Execute flash arbitrage
   const executeFlashArbitrage = useCallback(async () => {
     if (!account) {
-      addLog('❌ Please connect wallet first');
+      addLog('[ERROR] Please connect wallet first');
       return;
     }
 
     if (!selectedBorrowPool) {
-      addLog('❌ Please select a borrow pool');
+      addLog('[ERROR] Please select a borrow pool');
       return;
     }
 
     const amount = parseFloat(borrowAmount);
     if (isNaN(amount) || amount <= 0) {
-      addLog('❌ Invalid borrow amount');
+      addLog('[ERROR] Invalid borrow amount');
       return;
     }
 
     const borrowPoolInfo = getPoolInfo(CONFIG, selectedBorrowPool);
     if (!borrowPoolInfo) {
-      addLog('❌ Invalid borrow pool');
+      addLog('[ERROR] Invalid borrow pool');
       return;
     }
 
@@ -179,10 +180,17 @@ export default function FlashArbitragePage() {
     const assetDecimals = getCoinDecimals(CONFIG, assetSymbol);
     const borrowAmountUnits = toUnits(amount, assetDecimals);
 
-    addLog(`🚀 Executing flash loan arbitrage...`);
+    // Log all values for debugging
+    console.log('[FlashLoan Debug] borrowAsset value:', borrowAsset);
+    console.log('[FlashLoan Debug] assetSymbol:', assetSymbol);
+    console.log('[FlashLoan Debug] assetDecimals:', assetDecimals);
+    console.log('[FlashLoan Debug] borrowAmountUnits:', borrowAmountUnits.toString());
+    
+    addLog(`Executing flash loan arbitrage...`);
     addLog(`  Borrow Pool: ${selectedBorrowPool}`);
     addLog(`  Borrow Asset: ${assetSymbol} (${borrowAsset})`);
     addLog(`  Amount: ${amount} ${assetSymbol}`);
+    addLog(`  Units: ${borrowAmountUnits.toString()}`);
 
     const tx = new Transaction();
     
@@ -191,8 +199,10 @@ export default function FlashArbitragePage() {
     tx.setGasBudget(500_000_000); // 0.5 SUI for complex tx
 
     try {
-      // Step 1: Borrow via flash loan
-      addLog('  1️⃣ Borrowing via flash loan...');
+      // Step 1: Borrow via flash loan - use explicit check for 'quote' for safety
+      const isQuoteBorrow = borrowAsset === 'quote';
+      addLog(`  Step 1: Borrowing via flash loan (${isQuoteBorrow ? 'QUOTE' : 'BASE'})...`);
+      console.log('[FlashLoan Debug] isQuoteBorrow:', isQuoteBorrow);
       
       const borrowParams = {
         tx,
@@ -201,21 +211,29 @@ export default function FlashArbitragePage() {
         borrowAmount: borrowAmountUnits,
       };
       
-      const [borrowedCoin, flashLoan] = borrowAsset === 'base'
-        ? borrowFlashLoanBase(borrowParams)
-        : borrowFlashLoanQuote(borrowParams);
+      // Explicit if/else for clarity
+      let borrowedCoin: TransactionObjectArgument;
+      let flashLoan: TransactionObjectArgument;
+      
+      if (isQuoteBorrow) {
+        addLog(`  → Calling borrowFlashLoanQuote (borrow_flashloan_quote)`);
+        [borrowedCoin, flashLoan] = borrowFlashLoanQuote(borrowParams);
+      } else {
+        addLog(`  → Calling borrowFlashLoanBase (borrow_flashloan_base)`);
+        [borrowedCoin, flashLoan] = borrowFlashLoanBase(borrowParams);
+      }
 
       // Step 2: In a real arbitrage, you would:
       // - Swap on another pool for profit
       // - Swap back to original asset
       // For demo, we'll just return the borrowed amount
       
-      addLog('  2️⃣ (Demo) Holding borrowed funds...');
-      addLog('  ⚠️ Real arbitrage would swap through other pools here');
+      addLog('  Step 2: (Demo) Holding borrowed funds...');
+      addLog('  [WARN] Real arbitrage would swap through other pools here');
       
       // Step 3: Return the flash loan
       // IMPORTANT: Must return at least the borrowed amount
-      addLog('  3️⃣ Returning flash loan...');
+      addLog('  Step 3: Returning flash loan...');
       
       const returnParams = {
         tx,
@@ -225,38 +243,40 @@ export default function FlashArbitragePage() {
         flashLoan,
       };
       
-      if (borrowAsset === 'base') {
-        returnFlashLoanBase(returnParams);
-      } else {
+      if (isQuoteBorrow) {
+        addLog(`  → Calling returnFlashLoanQuote`);
         returnFlashLoanQuote(returnParams);
+      } else {
+        addLog(`  → Calling returnFlashLoanBase`);
+        returnFlashLoanBase(returnParams);
       }
       
       // NOTE: In a real arbitrage, you'd have profit left over after returning
       // the loan. You'd transfer that profit to yourself.
       
-      addLog('  4️⃣ Flash loan cycle complete!');
+      addLog('  Step 4: Flash loan cycle complete!');
 
       signAndExecute(
         { transaction: tx as any },
         {
           onSuccess: (result) => {
             const explorerUrl = getExplorerUrl(NETWORK, result.digest);
-            addLog(`✅ Flash loan TX successful!`);
-            addLog(`📎 Explorer: ${explorerUrl}`);
-            addLog(`ℹ️ This was a demo - borrowed and returned same amount`);
+            addLog(`[OK] Flash loan TX successful!`);
+            addLog(`Explorer: ${explorerUrl}`);
+            addLog(`Note: This was a demo - borrowed and returned same amount`);
             setLastTx(result.digest);
           },
           onError: (error) => {
-            addLog(`❌ Flash loan failed: ${error.message}`);
+            addLog(`[ERROR] Flash loan failed: ${error.message}`);
             if (error.message.includes('InsufficientPoolLiquidity') || error.message.includes('EInsufficientBaseCoin')) {
-              addLog(`💡 Pool has insufficient liquidity for this borrow amount`);
+              addLog(`Tip: Pool has insufficient liquidity for this borrow amount`);
             }
             console.error('Flash loan error:', error);
           },
         }
       );
     } catch (error: any) {
-      addLog(`❌ Error: ${error.message}`);
+      addLog(`[ERROR] Error: ${error.message}`);
       console.error('Flash loan error:', error);
     }
   }, [account, selectedBorrowPool, borrowAmount, borrowAsset, signAndExecute, addLog]);
@@ -264,17 +284,17 @@ export default function FlashArbitragePage() {
   // Execute full arbitrage cycle with swap
   const executeFullArbitrage = useCallback(async (opp: ArbitrageOpportunity) => {
     if (!account) {
-      addLog('❌ Please connect wallet first');
+      addLog('[ERROR] Please connect wallet first');
       return;
     }
 
-    addLog(`🚀 Executing full arbitrage: ${opp.path.join(' → ')}`);
+    addLog(`Executing full arbitrage: ${opp.path.join(' → ')}`);
     
     const borrowPoolInfo = getPoolInfo(CONFIG, opp.borrowPool);
     const swapPoolInfo = getPoolInfo(CONFIG, opp.swapPool);
     
     if (!borrowPoolInfo || !swapPoolInfo) {
-      addLog('❌ Invalid pool configuration');
+      addLog('[ERROR] Invalid pool configuration');
       return;
     }
 
@@ -287,7 +307,7 @@ export default function FlashArbitragePage() {
 
     try {
       // Step 1: Flash loan borrow base asset
-      addLog(`  1️⃣ Flash borrow ${opp.borrowAmount} ${borrowPoolInfo.baseCoin}...`);
+      addLog(`  Step 1: Flash borrow ${opp.borrowAmount} ${borrowPoolInfo.baseCoin}...`);
       
       const [borrowedCoin, flashLoan] = borrowFlashLoanBase({
         tx,
@@ -297,7 +317,7 @@ export default function FlashArbitragePage() {
       });
 
       // Step 2: Swap on the swap pool
-      addLog(`  2️⃣ Swap on ${opp.swapPool}...`);
+      addLog(`  Step 2: Swap on ${opp.swapPool}...`);
       
       // Create zero DEEP coin for fees
       const deepCoinType = CONFIG.coins['DEEP'].type;
@@ -317,7 +337,7 @@ export default function FlashArbitragePage() {
       // Step 3: For a complete arbitrage, you'd need another swap back
       // This is simplified - in reality you'd chain multiple swaps
       
-      addLog(`  3️⃣ (Simplified) Returning flash loan...`);
+      addLog(`  Step 3: (Simplified) Returning flash loan...`);
       
       // Note: In a real arbitrage, you'd have more of the base asset after swaps
       // and return the borrowed amount, keeping profit
@@ -329,7 +349,7 @@ export default function FlashArbitragePage() {
       // Transfer swap results to user
       tx.transferObjects([swapResult[0], swapResult[1], swapResult[2]], account.address);
       
-      addLog(`⚠️ Note: Full cycle requires matching pools with liquidity`);
+      addLog(`[WARN] Note: Full cycle requires matching pools with liquidity`);
       addLog(`  This demo shows the flash loan + swap pattern`);
 
       signAndExecute(
@@ -337,21 +357,21 @@ export default function FlashArbitragePage() {
         {
           onSuccess: (result) => {
             const explorerUrl = getExplorerUrl(NETWORK, result.digest);
-            addLog(`✅ Transaction submitted!`);
-            addLog(`📎 Explorer: ${explorerUrl}`);
+            addLog(`[OK] Transaction submitted!`);
+            addLog(`Explorer: ${explorerUrl}`);
             setLastTx(result.digest);
           },
           onError: (error) => {
-            addLog(`❌ Failed: ${error.message}`);
+            addLog(`[ERROR] Failed: ${error.message}`);
             if (error.message.includes('FlashLoan')) {
-              addLog(`💡 Flash loan must be returned in same transaction`);
+              addLog(`Tip: Flash loan must be returned in same transaction`);
             }
             console.error('Arbitrage error:', error);
           },
         }
       );
     } catch (error: any) {
-      addLog(`❌ Error: ${error.message}`);
+      addLog(`[ERROR] Error: ${error.message}`);
       console.error('Arbitrage error:', error);
     }
   }, [account, signAndExecute, addLog]);
@@ -360,48 +380,49 @@ export default function FlashArbitragePage() {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <div className="w-full max-w-[800px] mx-auto px-6 py-12">
+      <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
           <div>
-            <h1 className="text-2xl font-bold text-white mb-1">Flash Loan Arbitrage</h1>
-            <p className="text-gray-400">Atomic arbitrage using DeepBook V3 flash loans</p>
+            <div className="flex items-center gap-3 mb-1">
+              <Link href="/demo" className="text-gray-400 hover:text-white text-sm">Back</Link>
+              <h1 className="text-xl sm:text-2xl font-bold text-white">Flash Loan Arbitrage</h1>
+            </div>
+            <p className="text-sm text-gray-400">Atomic arbitrage using DeepBook V3 flash loans</p>
           </div>
-          <div className="flex items-center gap-3">
-            <span className={`px-3 py-1.5 rounded-lg text-sm ${
-              NETWORK === 'mainnet'
-                ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-            }`}>
-              {NETWORK}
-            </span>
-          </div>
+          <span className={`px-2.5 py-1 rounded-lg text-xs ${
+            NETWORK === 'mainnet'
+              ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+              : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+          }`}>
+            {NETWORK}
+          </span>
         </div>
 
         {/* Info Banner */}
-        <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
-          <h3 className="font-medium text-blue-400 mb-2">How Flash Loan Arbitrage Works</h3>
-          <ol className="text-sm text-gray-300 space-y-1 list-decimal list-inside">
-            <li>Borrow assets from a DeepBook pool via flash loan (no collateral needed)</li>
-            <li>Swap on another pool at a better price</li>
-            <li>Swap back to the original asset with profit</li>
-            <li>Return the borrowed amount + keep profit</li>
-            <li className="text-yellow-400">All steps MUST complete in one transaction or it reverts</li>
+        <div className="mb-5 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+          <h3 className="font-medium text-blue-400 text-sm mb-1.5">How Flash Loan Arbitrage Works</h3>
+          <ol className="text-xs text-gray-300 space-y-0.5 list-decimal list-inside">
+            <li>Borrow assets from DeepBook pool via flash loan (no collateral)</li>
+            <li>Swap on another pool at better price</li>
+            <li>Swap back to original asset with profit</li>
+            <li>Return borrowed amount + keep profit</li>
+            <li className="text-yellow-400">All steps MUST complete in one transaction</li>
           </ol>
         </div>
 
         {/* Flash Loan Config */}
-        <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-800 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Flash Loan Configuration</h2>
+        <div className="bg-gray-900/50 rounded-lg p-4 sm:p-5 border border-gray-800 mb-5">
+          <h2 className="text-base font-semibold mb-3">Flash Loan Configuration</h2>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
             {/* Borrow Pool */}
             <div>
-              <label className="block text-sm text-gray-400 mb-2">Borrow Pool</label>
+              <label className="block text-sm text-gray-400 mb-1.5">Borrow Pool</label>
               <select
                 value={selectedBorrowPool}
                 onChange={(e) => setSelectedBorrowPool(e.target.value)}
-                className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-sky-500"
+                className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-sky-500"
               >
                 {availablePools.map(pool => {
                   const info = getPoolInfo(CONFIG, pool);
@@ -416,11 +437,11 @@ export default function FlashArbitragePage() {
 
             {/* Borrow Asset */}
             <div>
-              <label className="block text-sm text-gray-400 mb-2">Borrow Asset</label>
+              <label className="block text-sm text-gray-400 mb-1.5">Borrow Asset</label>
               <select
                 value={borrowAsset}
                 onChange={(e) => setBorrowAsset(e.target.value as 'base' | 'quote')}
-                className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-sky-500"
+                className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-sky-500"
               >
                 <option value="base">Base ({borrowPoolInfo?.baseCoin})</option>
                 <option value="quote">Quote ({borrowPoolInfo?.quoteCoin})</option>
@@ -429,29 +450,29 @@ export default function FlashArbitragePage() {
           </div>
 
           {/* Borrow Amount */}
-          <div className="mb-4">
-            <label className="block text-sm text-gray-400 mb-2">Borrow Amount</label>
+          <div className="mb-3">
+            <label className="block text-sm text-gray-400 mb-1.5">Borrow Amount</label>
             <div className="flex gap-2">
               <input
                 type="number"
                 value={borrowAmount}
                 onChange={(e) => setBorrowAmount(e.target.value)}
                 placeholder="1.0"
-                className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-sky-500"
+                className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-sky-500"
               />
-              <span className="flex items-center px-3 bg-gray-800 rounded-lg text-gray-400">
+              <span className="flex items-center px-3 bg-gray-800 rounded-lg text-sm text-gray-400">
                 {borrowAsset === 'base' ? borrowPoolInfo?.baseCoin : borrowPoolInfo?.quoteCoin}
               </span>
             </div>
           </div>
 
           {/* Swap Pool (optional) */}
-          <div className="mb-6">
-            <label className="block text-sm text-gray-400 mb-2">Swap Pool (for arbitrage)</label>
+          <div className="mb-4">
+            <label className="block text-sm text-gray-400 mb-1.5">Swap Pool (for arbitrage)</label>
             <select
               value={selectedSwapPool}
               onChange={(e) => setSelectedSwapPool(e.target.value)}
-              className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-sky-500"
+              className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-sky-500"
             >
               <option value="">-- Select swap pool --</option>
               {availablePools.filter(p => p !== selectedBorrowPool).map(pool => {
@@ -466,17 +487,17 @@ export default function FlashArbitragePage() {
           </div>
 
           {/* Execute Buttons */}
-          <div className="flex gap-3">
+          <div className="flex gap-2">
             <button
               onClick={executeFlashArbitrage}
               disabled={isPending || !account || !selectedBorrowPool}
-              className="flex-1 py-3 bg-sky-500 hover:bg-sky-400 rounded-xl font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex-1 py-2.5 bg-sky-500 hover:bg-sky-400 rounded-lg font-semibold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isPending ? 'Executing...' : 'Execute Flash Loan Demo'}
+              {isPending ? 'Executing...' : 'Execute Flash Loan'}
             </button>
             <button
               onClick={scanOpportunities}
-              className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-xl font-medium transition-colors"
+              className="px-4 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium text-sm transition-colors"
             >
               Scan
             </button>
@@ -485,26 +506,26 @@ export default function FlashArbitragePage() {
 
         {/* Opportunities */}
         {opportunities.length > 0 && (
-          <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-800 mb-6">
-            <h2 className="text-lg font-semibold mb-4">Arbitrage Opportunities</h2>
-            <div className="space-y-3">
+          <div className="bg-gray-900/50 rounded-lg p-4 sm:p-5 border border-gray-800 mb-5">
+            <h2 className="text-base font-semibold mb-3">Arbitrage Opportunities</h2>
+            <div className="space-y-2">
               {opportunities.map(opp => (
                 <div
                   key={opp.id}
-                  className="p-4 bg-black/50 rounded-xl border border-gray-700 hover:border-sky-500/50 transition-colors"
+                  className="p-3 bg-black/50 rounded-lg border border-gray-700 hover:border-sky-500/50 transition-colors"
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-medium text-sky-400">{opp.path.join(' → ')}</span>
-                    <span className={`text-sm ${opp.profitPercent > 0.5 ? 'text-green-400' : 'text-yellow-400'}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="font-medium text-sky-400 text-sm">{opp.path.join(' -> ')}</span>
+                    <span className={`text-xs ${opp.profitPercent > 0.5 ? 'text-green-400' : 'text-yellow-400'}`}>
                       ~{opp.profitPercent.toFixed(2)}% profit
                     </span>
                   </div>
-                  <div className="flex items-center justify-between text-sm text-gray-400">
+                  <div className="flex items-center justify-between text-xs text-gray-400">
                     <span>Borrow: {opp.borrowPool} | Swap: {opp.swapPool}</span>
                     <button
                       onClick={() => executeFullArbitrage(opp)}
                       disabled={isPending}
-                      className="px-3 py-1 bg-sky-500/20 text-sky-400 rounded-lg hover:bg-sky-500/30 disabled:opacity-50"
+                      className="px-2.5 py-1 bg-sky-500/20 text-sky-400 rounded hover:bg-sky-500/30 disabled:opacity-50"
                     >
                       Execute
                     </button>
@@ -512,16 +533,16 @@ export default function FlashArbitragePage() {
                 </div>
               ))}
             </div>
-            <p className="mt-3 text-xs text-gray-500">
-              ⚠️ Simulated profits. Real arbitrage requires pools with liquidity and price discrepancies.
+            <p className="mt-2 text-xs text-gray-500">
+              Note: Simulated profits. Real arbitrage requires pools with liquidity.
             </p>
           </div>
         )}
 
         {/* Activity Log */}
-        <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-800 mb-6">
-          <h3 className="text-sm font-medium text-gray-300 mb-3">Activity Log</h3>
-          <div className="bg-black/50 rounded-lg p-3 h-48 overflow-y-auto font-mono text-xs">
+        <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-800 mb-5">
+          <h3 className="text-sm font-medium text-gray-300 mb-2">Activity Log</h3>
+          <div className="bg-black/50 rounded-lg p-2.5 h-40 overflow-y-auto font-mono text-xs">
             {logs.length === 0 ? (
               <p className="text-gray-500">No activity yet. Execute a flash loan to see logs...</p>
             ) : (
@@ -534,8 +555,8 @@ export default function FlashArbitragePage() {
 
         {/* Last Transaction */}
         {lastTx && (
-          <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-xl mb-6">
-            <p className="text-sm text-green-400">
+          <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg mb-5">
+            <p className="text-xs text-green-400">
               Last TX: <a
                 href={getExplorerUrl(NETWORK, lastTx)}
                 target="_blank"
@@ -549,16 +570,15 @@ export default function FlashArbitragePage() {
         )}
 
         {/* Info */}
-        <div className="text-center text-sm text-gray-500 space-y-2">
+        <div className="text-center text-xs text-gray-500 space-y-1">
           <p>Flash loans allow you to borrow without collateral within a single transaction.</p>
-          <p>If you can't repay the loan by the end of the transaction, it automatically reverts.</p>
-          <p className="text-yellow-400">⚠️ Testnet pools often lack liquidity for profitable arbitrage.</p>
+          <p className="text-yellow-400">Note: Testnet pools often lack liquidity for arbitrage.</p>
         </div>
 
         {/* Back Link */}
-        <div className="mt-8 text-center">
-          <Link href="/demo" className="text-sky-400 hover:text-sky-300 transition-colors">
-            ← Back to Demo
+        <div className="mt-6 text-center">
+          <Link href="/demo" className="text-sky-400 hover:text-sky-300 text-sm transition-colors">
+            Back to Demo
           </Link>
         </div>
       </div>

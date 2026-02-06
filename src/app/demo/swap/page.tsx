@@ -168,13 +168,13 @@ export default function SwapPage() {
   // Execute swap
   const handleSwap = useCallback(async () => {
     if (!account) {
-      addLog('❌ Please connect wallet');
+      addLog('[ERROR] Please connect wallet');
       return;
     }
 
     const poolResult = getPoolInfo();
     if (!poolResult) {
-      addLog('❌ No pool available for this pair');
+      addLog('[ERROR] No pool available for this pair');
       return;
     }
 
@@ -182,11 +182,11 @@ export default function SwapPage() {
 
     const amount = parseFloat(fromAmount);
     if (isNaN(amount) || amount <= 0) {
-      addLog('❌ Invalid amount');
+      addLog('[ERROR] Invalid amount');
       return;
     }
 
-    addLog(`🔄 Swapping ${fromAmount} ${fromToken.symbol} → ${toToken.symbol}...`);
+    addLog(`Swapping ${fromAmount} ${fromToken.symbol} -> ${toToken.symbol}...`);
     addLog(`  Pool: ${poolKey} (${pool.address.slice(0, 10)}...)`);
 
     const tx = new Transaction();
@@ -210,7 +210,7 @@ export default function SwapPage() {
       // Get input coins for the token being swapped
       const inputCoins = userCoinObjects[fromToken.symbol] || [];
       if (inputCoins.length === 0 && fromToken.symbol !== 'SUI') {
-        addLog(`❌ No ${fromToken.symbol} coins found`);
+        addLog(`[ERROR] No ${fromToken.symbol} coins found`);
         return;
       }
 
@@ -269,28 +269,28 @@ export default function SwapPage() {
         {
           onSuccess: (result) => {
             const explorerUrl = getExplorerUrl(NETWORK, result.digest);
-            addLog(`✅ Swap transaction submitted!`);
-            addLog(`📎 View on explorer: ${explorerUrl}`);
-            addLog(`⏳ Check your wallet for ${toToken.symbol} balance`);
-            addLog(`ℹ️ Note: Testnet pools may have low liquidity`);
+            addLog(`[OK] Swap transaction submitted!`);
+            addLog(`Explorer: ${explorerUrl}`);
+            addLog(`Check your wallet for ${toToken.symbol} balance`);
+            addLog(`Note: Testnet pools may have low liquidity`);
             setLastTx(result.digest);
             setFromAmount('');
             setToAmount('');
           },
           onError: (error) => {
-            addLog(`❌ Swap failed: ${error.message}`);
+            addLog(`[ERROR] Swap failed: ${error.message}`);
             // Parse common errors
             if (error.message.includes('InsufficientCoinBalance')) {
-              addLog(`💡 Tip: You may not have enough tokens for this swap`);
+              addLog(`Tip: You may not have enough tokens for this swap`);
             } else if (error.message.includes('InsufficientLiquidity') || error.message.includes('EINSUFFICIENT')) {
-              addLog(`💡 Tip: Pool may have insufficient liquidity`);
+              addLog(`Tip: Pool may have insufficient liquidity`);
             }
             console.error('Swap error:', error);
           },
         }
       );
     } catch (error: any) {
-      addLog(`❌ Error: ${error.message}`);
+      addLog(`[ERROR] Error: ${error.message}`);
       console.error('Swap error:', error);
     }
   }, [account, fromAmount, fromToken, toToken, toAmount, slippage, getPoolInfo, signAndExecute, addLog, userCoinObjects]);

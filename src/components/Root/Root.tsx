@@ -6,7 +6,6 @@ import {
   useLaunchParams,
   useSignal,
 } from '@tma.js/sdk-react';
-import { AppRoot } from '@telegram-apps/telegram-ui';
 
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ErrorPage } from '@/components/ErrorPage';
@@ -16,19 +15,11 @@ import { useDidMount } from '@/hooks/useDidMount';
 import './styles.css';
 
 function RootInner({ children }: PropsWithChildren) {
-  const lp = useLaunchParams();
-  const isDark = useSignal(miniApp.isDark);
-
   return (
     <AuthProvider>
-      <AppRoot
-        appearance={isDark ? 'dark' : 'light'}
-        platform={
-          ['macos', 'ios'].includes(lp.tgWebAppPlatform) ? 'ios' : 'base'
-        }
-      >
+      <div className="app-root">
         {children}
-      </AppRoot>
+      </div>
     </AuthProvider>
   );
 }
