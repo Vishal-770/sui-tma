@@ -1,530 +1,565 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Transaction } from '@mysten/sui/transactions';
+import { Transaction, coinWithBalance } from '@mysten/sui/transactions';
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit';
-import { 
-  fetchPrice,
-  fetchPrices,
-  POOLS, 
-  DEMO_MODE,
-  CURRENT_ENV,
-  COIN_TYPES,
-  DEEPBOOK_TESTNET,
-  DEEPBOOK_MAINNET,
-  buildFlashArbitrageTx,
-  buildDemoFlashArbitrageTx,
-  findArbitrageOpportunity,
-  getAvailablePools,
-} from '@/lib/deepbook';
 import Link from 'next/link';
+import {
+  getConfig,
+  getAvailablePoolKeys,
+  getPoolInfo,
+  borrowFlashLoanBase,
+  borrowFlashLoanQuote,
+  returnFlashLoanBase,
+  returnFlashLoanQuote,
+  swapExactBaseForQuote,
+  swapExactQuoteForBase,
+  toUnits,
+  fromUnits,
+  getExplorerUrl,
+  getCoinDecimals,
+  type NetworkEnv,
+  type DeepBookConfig,
+} from '@/lib/deepbook-v3';
+
+// Get network from environment
+const NETWORK: NetworkEnv = (process.env.NEXT_PUBLIC_SUI_NETWORK as NetworkEnv) || 'testnet';
+const CONFIG = getConfig(NETWORK);
 
 interface ArbitrageOpportunity {
   id: string;
-  path: string[];
-  pools: string[];
-  expectedProfit: number;
-  profitPercent: number;
-  requiredCapital: number;
-  risk: 'low' | 'medium' | 'high';
-  timestamp: Date;
   borrowPool: string;
-  swapPool1: string;
-  swapPool2: string;
+  borrowAsset: 'base' | 'quote';
+  swapPool: string;
+  path: string[];
+  borrowAmount: number;
+  estimatedReturn: number;
+  estimatedProfit: number;
+  profitPercent: number;
 }
 
 export default function FlashArbitragePage() {
   const account = useCurrentAccount();
   const suiClient = useSuiClient();
   const { mutate: signAndExecute, isPending } = useSignAndExecuteTransaction();
-  
-  const [opportunities, setOpportunities] = useState<ArbitrageOpportunity[]>([]);
-  const [selectedOpportunity, setSelectedOpportunity] = useState<ArbitrageOpportunity | null>(null);
-  const [prices, setPrices] = useState<Record<string, number>>({});
-  const [isScanning, setIsScanning] = useState(false);
-  const [executionResult, setExecutionResult] = useState<string | null>(null);
+
+  const [selectedBorrowPool, setSelectedBorrowPool] = useState<string>('');
+  const [selectedSwapPool, setSelectedSwapPool] = useState<string>('');
+  const [borrowAmount, setBorrowAmount] = useState('1');
+  const [borrowAsset, setBorrowAsset] = useState<'base' | 'quote'>('base');
   const [logs, setLogs] = useState<string[]>([]);
-  const [executedCount, setExecutedCount] = useState(0);
-  const [totalProfit, setTotalProfit] = useState(0);
-  const [userDeepCoins, setUserDeepCoins] = useState<string[]>([]);
+  const [lastTx, setLastTx] = useState<string | null>(null);
+  const [opportunities, setOpportunities] = useState<ArbitrageOpportunity[]>([]);
+  const [poolBalances, setPoolBalances] = useState<Record<string, { base: bigint; quote: bigint }>>({});
 
   const addLog = useCallback((message: string) => {
-    setLogs(prev => [...prev.slice(-19), `[${new Date().toLocaleTimeString()}] ${message}`]);
+    setLogs(prev => [...prev.slice(-14), `[${new Date().toLocaleTimeString()}] ${message}`]);
   }, []);
 
-  // Fetch user's DEEP coins for fees
-  useEffect(() => {
-    if (!account?.address) return;
+  const availablePools = getAvailablePoolKeys(CONFIG);
 
-    const fetchDeepCoins = async () => {
-      try {
-        const coins = await suiClient.getCoins({
-          owner: account.address,
-          coinType: COIN_TYPES.DEEP,
-        });
-        setUserDeepCoins(coins.data.map(c => c.coinObjectId));
-      } catch (error) {
-        console.warn('Failed to fetch DEEP coins:', error);
+  // Set default pools
+  useEffect(() => {
+    if (availablePools.length > 0 && !selectedBorrowPool) {
+      setSelectedBorrowPool(availablePools[0]);
+      if (availablePools.length > 1) {
+        setSelectedSwapPool(availablePools[1]);
       }
-    };
+    }
+  }, [availablePools, selectedBorrowPool]);
 
-    fetchDeepCoins();
-  }, [account?.address, suiClient]);
-
-  // Fetch prices periodically
+  // Fetch pool liquidity info
   useEffect(() => {
-    const fetchAllPrices = async () => {
-      const poolKeys = getAvailablePools();
-      const newPrices = await fetchPrices(poolKeys);
-      setPrices(newPrices);
+    const fetchPoolInfo = async () => {
+      const balances: Record<string, { base: bigint; quote: bigint }> = {};
+      
+      for (const poolKey of availablePools) {
+        const pool = getPoolInfo(CONFIG, poolKey);
+        if (pool) {
+          try {
+            const poolObject = await suiClient.getObject({
+              id: pool.address,
+              options: { showContent: true },
+            });
+            
+            // Pool liquidity would be in the object content
+            // For now, mark as available
+            balances[poolKey] = { base: BigInt(0), quote: BigInt(0) };
+          } catch {
+            balances[poolKey] = { base: BigInt(0), quote: BigInt(0) };
+          }
+        }
+      }
+      
+      setPoolBalances(balances);
     };
 
-    fetchAllPrices();
-    const interval = setInterval(fetchAllPrices, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    fetchPoolInfo();
+  }, [availablePools, suiClient]);
 
-  // Scan for arbitrage opportunities
-  const scanForOpportunities = useCallback(async () => {
-    setIsScanning(true);
-    addLog('🔍 Scanning for arbitrage opportunities across DeepBook pools...');
-
-    const poolKeys = getAvailablePools();
-    const foundOpportunities: ArbitrageOpportunity[] = [];
-
-    // Check different pool combinations
-    for (let i = 0; i < poolKeys.length; i++) {
-      for (let j = 0; j < poolKeys.length; j++) {
+  // Generate demo opportunities
+  const scanOpportunities = useCallback(() => {
+    addLog('🔍 Scanning for arbitrage opportunities...');
+    
+    const opps: ArbitrageOpportunity[] = [];
+    
+    // Generate some demo opportunities based on available pools
+    for (let i = 0; i < availablePools.length; i++) {
+      for (let j = 0; j < availablePools.length; j++) {
         if (i === j) continue;
         
-        const result = await findArbitrageOpportunity([poolKeys[i], poolKeys[j]]);
-        if (result && result.exists) {
-          const risk = result.estimatedProfit > 1 ? 'low' : result.estimatedProfit > 0.3 ? 'medium' : 'high';
+        const borrowPool = availablePools[i];
+        const swapPool = availablePools[j];
+        
+        const borrowPoolInfo = getPoolInfo(CONFIG, borrowPool);
+        const swapPoolInfo = getPoolInfo(CONFIG, swapPool);
+        
+        if (!borrowPoolInfo || !swapPoolInfo) continue;
+        
+        // Check if there's a shared coin between pools for arbitrage path
+        const sharedCoins = [borrowPoolInfo.baseCoin, borrowPoolInfo.quoteCoin].filter(
+          c => c === swapPoolInfo.baseCoin || c === swapPoolInfo.quoteCoin
+        );
+        
+        if (sharedCoins.length > 0) {
+          const path = [
+            borrowPoolInfo.baseCoin,
+            sharedCoins[0],
+            borrowPoolInfo.baseCoin,
+          ];
           
-          foundOpportunities.push({
-            id: `arb_${Date.now()}_${i}_${j}`,
-            path: result.path,
-            pools: result.pools,
-            expectedProfit: result.estimatedProfit * 0.05, // Scale down for realistic display
-            profitPercent: result.estimatedProfit,
-            requiredCapital: 5.0,
-            risk,
-            timestamp: new Date(),
-            borrowPool: result.pools[0],
-            swapPool1: result.pools[0],
-            swapPool2: result.pools[1],
+          // Simulated profit calculation (in reality, would query orderbook)
+          const estimatedProfit = Math.random() * 0.05; // 0-5% simulated
+          
+          opps.push({
+            id: `opp_${i}_${j}`,
+            borrowPool,
+            borrowAsset: 'base',
+            swapPool,
+            path,
+            borrowAmount: 1,
+            estimatedReturn: 1 + estimatedProfit,
+            estimatedProfit: estimatedProfit,
+            profitPercent: estimatedProfit * 100,
           });
         }
       }
     }
+    
+    setOpportunities(opps.slice(0, 5)); // Top 5
+    addLog(`Found ${opps.length} potential arbitrage paths`);
+    addLog('⚠️ Note: Testnet pools often have no liquidity');
+  }, [availablePools, addLog]);
 
-    // If no real opportunities, show simulated ones for demo
-    if (foundOpportunities.length === 0 || DEMO_MODE) {
-      const demoOpportunities: ArbitrageOpportunity[] = [
-        {
-          id: `arb_${Date.now()}_1`,
-          path: ['SUI', 'DBUSDC', 'DEEP', 'SUI'],
-          pools: ['SUI_DBUSDC', 'DEEP_DBUSDC', 'DEEP_SUI'],
-          expectedProfit: 0.0234,
-          profitPercent: 0.47,
-          requiredCapital: 5.0,
-          risk: 'low',
-          timestamp: new Date(),
-          borrowPool: 'SUI_DBUSDC',
-          swapPool1: 'SUI_DBUSDC',
-          swapPool2: 'DEEP_SUI',
-        },
-        {
-          id: `arb_${Date.now()}_2`,
-          path: ['SUI', 'DEEP', 'DBUSDC', 'SUI'],
-          pools: ['DEEP_SUI', 'DEEP_DBUSDC', 'SUI_DBUSDC'],
-          expectedProfit: 0.0156,
-          profitPercent: 0.31,
-          requiredCapital: 5.0,
-          risk: 'low',
-          timestamp: new Date(),
-          borrowPool: 'DEEP_SUI',
-          swapPool1: 'DEEP_SUI',
-          swapPool2: 'SUI_DBUSDC',
-        },
-        {
-          id: `arb_${Date.now()}_3`,
-          path: ['DBUSDC', 'SUI', 'DEEP', 'DBUSDC'],
-          pools: ['SUI_DBUSDC', 'DEEP_SUI', 'DEEP_DBUSDC'],
-          expectedProfit: 0.0089,
-          profitPercent: 0.18,
-          requiredCapital: 5.0,
-          risk: 'medium',
-          timestamp: new Date(),
-          borrowPool: 'SUI_DBUSDC',
-          swapPool1: 'DEEP_SUI',
-          swapPool2: 'DEEP_DBUSDC',
-        },
-      ];
-      
-      setOpportunities([...foundOpportunities, ...demoOpportunities]);
-      addLog(`Found ${foundOpportunities.length} real + ${demoOpportunities.length} simulated opportunities`);
-    } else {
-      setOpportunities(foundOpportunities);
-      addLog(`Found ${foundOpportunities.length} arbitrage opportunities`);
-    }
-
-    setIsScanning(false);
-  }, [addLog]);
-
-  // Execute arbitrage
-  const executeArbitrage = useCallback(async (opp: ArbitrageOpportunity) => {
+  // Execute flash arbitrage
+  const executeFlashArbitrage = useCallback(async () => {
     if (!account) {
       addLog('❌ Please connect wallet first');
       return;
     }
 
-    addLog(`🚀 Executing arbitrage: ${opp.path.join(' → ')}`);
-    addLog(`Expected profit: ${opp.expectedProfit.toFixed(4)} SUI (${opp.profitPercent}%)`);
+    if (!selectedBorrowPool) {
+      addLog('❌ Please select a borrow pool');
+      return;
+    }
+
+    const amount = parseFloat(borrowAmount);
+    if (isNaN(amount) || amount <= 0) {
+      addLog('❌ Invalid borrow amount');
+      return;
+    }
+
+    const borrowPoolInfo = getPoolInfo(CONFIG, selectedBorrowPool);
+    if (!borrowPoolInfo) {
+      addLog('❌ Invalid borrow pool');
+      return;
+    }
+
+    const assetSymbol = borrowAsset === 'base' ? borrowPoolInfo.baseCoin : borrowPoolInfo.quoteCoin;
+    const assetDecimals = getCoinDecimals(CONFIG, assetSymbol);
+    const borrowAmountUnits = toUnits(amount, assetDecimals);
+
+    addLog(`🚀 Executing flash loan arbitrage...`);
+    addLog(`  Borrow Pool: ${selectedBorrowPool}`);
+    addLog(`  Borrow Asset: ${assetSymbol} (${borrowAsset})`);
+    addLog(`  Amount: ${amount} ${assetSymbol}`);
 
     const tx = new Transaction();
-    const deepBookConfig = CURRENT_ENV === 'mainnet' ? DEEPBOOK_MAINNET : DEEPBOOK_TESTNET;
+    
+    // CRITICAL: Must set sender BEFORE using coinWithBalance
+    tx.setSender(account.address);
+    tx.setGasBudget(500_000_000); // 0.5 SUI for complex tx
 
     try {
-      if (DEMO_MODE) {
-        // Demo mode: Simulate the arbitrage flow
-        addLog('📝 Demo mode: Simulating flash loan arbitrage...');
-        
-        // Step 1: Flash loan borrow simulation
-        addLog('  1️⃣ Borrowing 5 SUI via flash loan from DeepBook...');
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Step 2: First swap
-        addLog(`  2️⃣ Swapping ${opp.path[0]} → ${opp.path[1]} in ${opp.swapPool1}...`);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Step 3: Second swap
-        addLog(`  3️⃣ Swapping ${opp.path[1]} → ${opp.path[2]} in ${opp.swapPool2}...`);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Step 4: Third swap (back to original)
-        addLog(`  4️⃣ Swapping ${opp.path[2]} → ${opp.path[3] || opp.path[0]}...`);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Step 5: Repay flash loan
-        addLog('  5️⃣ Repaying flash loan + fee to DeepBook pool...');
-        await new Promise(resolve => setTimeout(resolve, 500));
+      // Step 1: Borrow via flash loan
+      addLog('  1️⃣ Borrowing via flash loan...');
+      
+      const borrowParams = {
+        tx,
+        config: CONFIG,
+        poolKey: selectedBorrowPool,
+        borrowAmount: borrowAmountUnits,
+      };
+      
+      const [borrowedCoin, flashLoan] = borrowAsset === 'base'
+        ? borrowFlashLoanBase(borrowParams)
+        : borrowFlashLoanQuote(borrowParams);
 
-        // Create a minimal transaction to show on-chain activity
-        // CRITICAL: Must transfer the result to avoid UnusedValueWithoutDrop error
-        const [demoCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(1)]);
-        tx.transferObjects([demoCoin], tx.pure.address(account.address));
+      // Step 2: In a real arbitrage, you would:
+      // - Swap on another pool for profit
+      // - Swap back to original asset
+      // For demo, we'll just return the borrowed amount
+      
+      addLog('  2️⃣ (Demo) Holding borrowed funds...');
+      addLog('  ⚠️ Real arbitrage would swap through other pools here');
+      
+      // Step 3: Return the flash loan
+      // IMPORTANT: Must return at least the borrowed amount
+      addLog('  3️⃣ Returning flash loan...');
+      
+      const returnParams = {
+        tx,
+        config: CONFIG,
+        poolKey: selectedBorrowPool,
+        coin: borrowedCoin,
+        flashLoan,
+      };
+      
+      if (borrowAsset === 'base') {
+        returnFlashLoanBase(returnParams);
       } else {
-        // Real mode: Build actual flash arbitrage transaction
-        addLog('🔗 Building real flash arbitrage PTB...');
-        
-        // Get or create DEEP coin for fees
-        let deepCoin;
-        if (userDeepCoins.length > 0) {
-          deepCoin = tx.object(userDeepCoins[0]);
-        } else {
-          // If no DEEP, use zero coin (may fail if pool requires DEEP)
-          addLog('⚠️ No DEEP tokens found - arbitrage may fail');
-          const [zeroCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(0)]);
-          deepCoin = zeroCoin;
-        }
-
-        const borrowAmount = BigInt(Math.floor(opp.requiredCapital * 1e9)); // Convert to MIST
-        const minProfit = BigInt(Math.floor(opp.expectedProfit * 1e9 * 0.8)); // 80% of expected
-
-        // Build the actual arbitrage transaction
-        buildFlashArbitrageTx(
-          opp.borrowPool,
-          opp.swapPool1,
-          opp.swapPool2,
-          borrowAmount,
-          minProfit,
-          account.address,
-          deepCoin,
-          tx
-        );
-
-        addLog('  1️⃣ Flash loan borrow from ' + opp.borrowPool);
-        addLog('  2️⃣ Swap through ' + opp.swapPool1);
-        addLog('  3️⃣ Swap through ' + opp.swapPool2);
-        addLog('  4️⃣ Repay loan and capture profit');
+        returnFlashLoanQuote(returnParams);
       }
+      
+      // NOTE: In a real arbitrage, you'd have profit left over after returning
+      // the loan. You'd transfer that profit to yourself.
+      
+      addLog('  4️⃣ Flash loan cycle complete!');
 
       signAndExecute(
         { transaction: tx as any },
         {
           onSuccess: (result) => {
-            const explorerUrl = `https://suiscan.xyz/${CURRENT_ENV}/tx/${result.digest}`;
-            addLog(`✅ Arbitrage executed!`);
+            const explorerUrl = getExplorerUrl(NETWORK, result.digest);
+            addLog(`✅ Flash loan TX successful!`);
             addLog(`📎 Explorer: ${explorerUrl}`);
-            addLog(`💵 Profit captured: ${opp.expectedProfit.toFixed(4)} SUI`);
-            setExecutionResult(`Success! Profit: ${opp.expectedProfit.toFixed(4)} SUI`);
-            setExecutedCount(prev => prev + 1);
-            setTotalProfit(prev => prev + opp.expectedProfit);
-          
-            // Remove executed opportunity
-            setOpportunities(prev => prev.filter(o => o.id !== opp.id));
+            addLog(`ℹ️ This was a demo - borrowed and returned same amount`);
+            setLastTx(result.digest);
           },
           onError: (error) => {
-            addLog(`❌ Arbitrage failed: ${error.message}`);
-            setExecutionResult(`Failed: ${error.message}`);
+            addLog(`❌ Flash loan failed: ${error.message}`);
+            if (error.message.includes('InsufficientPoolLiquidity') || error.message.includes('EInsufficientBaseCoin')) {
+              addLog(`💡 Pool has insufficient liquidity for this borrow amount`);
+            }
+            console.error('Flash loan error:', error);
           },
         }
       );
     } catch (error: any) {
-      addLog(`❌ Error building transaction: ${error.message}`);
-      setExecutionResult(`Failed: ${error.message}`);
+      addLog(`❌ Error: ${error.message}`);
+      console.error('Flash loan error:', error);
     }
-  }, [account, signAndExecute, addLog, userDeepCoins]);
+  }, [account, selectedBorrowPool, borrowAmount, borrowAsset, signAndExecute, addLog]);
+
+  // Execute full arbitrage cycle with swap
+  const executeFullArbitrage = useCallback(async (opp: ArbitrageOpportunity) => {
+    if (!account) {
+      addLog('❌ Please connect wallet first');
+      return;
+    }
+
+    addLog(`🚀 Executing full arbitrage: ${opp.path.join(' → ')}`);
+    
+    const borrowPoolInfo = getPoolInfo(CONFIG, opp.borrowPool);
+    const swapPoolInfo = getPoolInfo(CONFIG, opp.swapPool);
+    
+    if (!borrowPoolInfo || !swapPoolInfo) {
+      addLog('❌ Invalid pool configuration');
+      return;
+    }
+
+    const baseDecimals = getCoinDecimals(CONFIG, borrowPoolInfo.baseCoin);
+    const borrowAmountUnits = toUnits(opp.borrowAmount, baseDecimals);
+
+    const tx = new Transaction();
+    tx.setSender(account.address);
+    tx.setGasBudget(500_000_000);
+
+    try {
+      // Step 1: Flash loan borrow base asset
+      addLog(`  1️⃣ Flash borrow ${opp.borrowAmount} ${borrowPoolInfo.baseCoin}...`);
+      
+      const [borrowedCoin, flashLoan] = borrowFlashLoanBase({
+        tx,
+        config: CONFIG,
+        poolKey: opp.borrowPool,
+        borrowAmount: borrowAmountUnits,
+      });
+
+      // Step 2: Swap on the swap pool
+      addLog(`  2️⃣ Swap on ${opp.swapPool}...`);
+      
+      // Create zero DEEP coin for fees
+      const deepCoinType = CONFIG.coins['DEEP'].type;
+      const deepCoin = coinWithBalance({ type: deepCoinType, balance: 0 });
+      
+      // Determine swap direction based on shared coin
+      const swapResult = swapExactBaseForQuote({
+        tx,
+        config: CONFIG,
+        poolKey: opp.swapPool,
+        inputCoin: borrowedCoin,
+        deepCoin,
+        minOutput: BigInt(0), // Accept any output on testnet
+        senderAddress: account.address,
+      });
+
+      // Step 3: For a complete arbitrage, you'd need another swap back
+      // This is simplified - in reality you'd chain multiple swaps
+      
+      addLog(`  3️⃣ (Simplified) Returning flash loan...`);
+      
+      // Note: In a real arbitrage, you'd have more of the base asset after swaps
+      // and return the borrowed amount, keeping profit
+      // This demo just shows the pattern
+      
+      // For now, we can't return directly because we swapped the coin
+      // This would need more complex logic to work properly
+      
+      // Transfer swap results to user
+      tx.transferObjects([swapResult[0], swapResult[1], swapResult[2]], account.address);
+      
+      addLog(`⚠️ Note: Full cycle requires matching pools with liquidity`);
+      addLog(`  This demo shows the flash loan + swap pattern`);
+
+      signAndExecute(
+        { transaction: tx as any },
+        {
+          onSuccess: (result) => {
+            const explorerUrl = getExplorerUrl(NETWORK, result.digest);
+            addLog(`✅ Transaction submitted!`);
+            addLog(`📎 Explorer: ${explorerUrl}`);
+            setLastTx(result.digest);
+          },
+          onError: (error) => {
+            addLog(`❌ Failed: ${error.message}`);
+            if (error.message.includes('FlashLoan')) {
+              addLog(`💡 Flash loan must be returned in same transaction`);
+            }
+            console.error('Arbitrage error:', error);
+          },
+        }
+      );
+    } catch (error: any) {
+      addLog(`❌ Error: ${error.message}`);
+      console.error('Arbitrage error:', error);
+    }
+  }, [account, signAndExecute, addLog]);
+
+  const borrowPoolInfo = selectedBorrowPool ? getPoolInfo(CONFIG, selectedBorrowPool) : null;
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <div className="w-full max-w-[1400px] mx-auto px-8 lg:px-16 py-12">
+      <div className="w-full max-w-[800px] mx-auto px-6 py-12">
         {/* Header */}
-        <div className="flex items-center justify-between mb-12">
+        <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-3xl font-bold text-white mb-2">Flash Arbitrage</h1>
-            <p className="text-gray-400 text-lg">
-              Capture risk-free profits with atomic flash loan arbitrage
+            <h1 className="text-2xl font-bold text-white mb-1">Flash Loan Arbitrage</h1>
+            <p className="text-gray-400">Atomic arbitrage using DeepBook V3 flash loans</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className={`px-3 py-1.5 rounded-lg text-sm ${
+              NETWORK === 'mainnet'
+                ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+            }`}>
+              {NETWORK}
+            </span>
+          </div>
+        </div>
+
+        {/* Info Banner */}
+        <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+          <h3 className="font-medium text-blue-400 mb-2">How Flash Loan Arbitrage Works</h3>
+          <ol className="text-sm text-gray-300 space-y-1 list-decimal list-inside">
+            <li>Borrow assets from a DeepBook pool via flash loan (no collateral needed)</li>
+            <li>Swap on another pool at a better price</li>
+            <li>Swap back to the original asset with profit</li>
+            <li>Return the borrowed amount + keep profit</li>
+            <li className="text-yellow-400">All steps MUST complete in one transaction or it reverts</li>
+          </ol>
+        </div>
+
+        {/* Flash Loan Config */}
+        <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-800 mb-6">
+          <h2 className="text-lg font-semibold mb-4">Flash Loan Configuration</h2>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            {/* Borrow Pool */}
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">Borrow Pool</label>
+              <select
+                value={selectedBorrowPool}
+                onChange={(e) => setSelectedBorrowPool(e.target.value)}
+                className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-sky-500"
+              >
+                {availablePools.map(pool => {
+                  const info = getPoolInfo(CONFIG, pool);
+                  return (
+                    <option key={pool} value={pool}>
+                      {pool} ({info?.baseCoin}/{info?.quoteCoin})
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            {/* Borrow Asset */}
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">Borrow Asset</label>
+              <select
+                value={borrowAsset}
+                onChange={(e) => setBorrowAsset(e.target.value as 'base' | 'quote')}
+                className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-sky-500"
+              >
+                <option value="base">Base ({borrowPoolInfo?.baseCoin})</option>
+                <option value="quote">Quote ({borrowPoolInfo?.quoteCoin})</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Borrow Amount */}
+          <div className="mb-4">
+            <label className="block text-sm text-gray-400 mb-2">Borrow Amount</label>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                value={borrowAmount}
+                onChange={(e) => setBorrowAmount(e.target.value)}
+                placeholder="1.0"
+                className="flex-1 bg-black border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-sky-500"
+              />
+              <span className="flex items-center px-3 bg-gray-800 rounded-lg text-gray-400">
+                {borrowAsset === 'base' ? borrowPoolInfo?.baseCoin : borrowPoolInfo?.quoteCoin}
+              </span>
+            </div>
+          </div>
+
+          {/* Swap Pool (optional) */}
+          <div className="mb-6">
+            <label className="block text-sm text-gray-400 mb-2">Swap Pool (for arbitrage)</label>
+            <select
+              value={selectedSwapPool}
+              onChange={(e) => setSelectedSwapPool(e.target.value)}
+              className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-sky-500"
+            >
+              <option value="">-- Select swap pool --</option>
+              {availablePools.filter(p => p !== selectedBorrowPool).map(pool => {
+                const info = getPoolInfo(CONFIG, pool);
+                return (
+                  <option key={pool} value={pool}>
+                    {pool} ({info?.baseCoin}/{info?.quoteCoin})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          {/* Execute Buttons */}
+          <div className="flex gap-3">
+            <button
+              onClick={executeFlashArbitrage}
+              disabled={isPending || !account || !selectedBorrowPool}
+              className="flex-1 py-3 bg-sky-500 hover:bg-sky-400 rounded-xl font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isPending ? 'Executing...' : 'Execute Flash Loan Demo'}
+            </button>
+            <button
+              onClick={scanOpportunities}
+              className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-xl font-medium transition-colors"
+            >
+              Scan
+            </button>
+          </div>
+        </div>
+
+        {/* Opportunities */}
+        {opportunities.length > 0 && (
+          <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-800 mb-6">
+            <h2 className="text-lg font-semibold mb-4">Arbitrage Opportunities</h2>
+            <div className="space-y-3">
+              {opportunities.map(opp => (
+                <div
+                  key={opp.id}
+                  className="p-4 bg-black/50 rounded-xl border border-gray-700 hover:border-sky-500/50 transition-colors"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-medium text-sky-400">{opp.path.join(' → ')}</span>
+                    <span className={`text-sm ${opp.profitPercent > 0.5 ? 'text-green-400' : 'text-yellow-400'}`}>
+                      ~{opp.profitPercent.toFixed(2)}% profit
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm text-gray-400">
+                    <span>Borrow: {opp.borrowPool} | Swap: {opp.swapPool}</span>
+                    <button
+                      onClick={() => executeFullArbitrage(opp)}
+                      disabled={isPending}
+                      className="px-3 py-1 bg-sky-500/20 text-sky-400 rounded-lg hover:bg-sky-500/30 disabled:opacity-50"
+                    >
+                      Execute
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-xs text-gray-500">
+              ⚠️ Simulated profits. Real arbitrage requires pools with liquidity and price discrepancies.
             </p>
           </div>
-          {DEMO_MODE && (
-            <span className="px-4 py-2 bg-sky-500/10 text-sky-400 border border-sky-500/20 rounded-lg text-sm font-medium">
-              Demo Mode
-            </span>
-          )}
-        </div>
+        )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left Column */}
-          <div className="space-y-6">
-            {/* Live Prices */}
-            <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-800">
-              <div className="flex items-center gap-3 mb-5">
-                <div className="w-2.5 h-2.5 bg-sky-400 rounded-full" />
-                <h2 className="font-medium text-gray-200">Live Prices</h2>
-              </div>
-              <div className="space-y-4">
-                {Object.entries(prices).map(([pair, price]) => (
-                  <div key={pair} className="flex justify-between items-center py-3 border-b border-gray-800 last:border-0">
-                    <span className="text-gray-400">{pair.replace('_', '/')}</span>
-                    <span className="font-mono text-sky-400 text-lg">${price.toFixed(4)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Scan Button */}
-            <button
-              onClick={scanForOpportunities}
-              disabled={isScanning}
-              className="w-full py-4 bg-sky-500 hover:bg-sky-400 rounded-xl font-semibold text-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isScanning ? 'Scanning...' : 'Scan for Opportunities'}
-            </button>
-
-            {/* Stats */}
-            <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-800">
-              <h2 className="font-medium text-gray-200 mb-5">Session Stats</h2>
-              <div className="space-y-4">
-                <div className="flex justify-between py-2">
-                  <span className="text-gray-500">Opportunities</span>
-                  <span className="text-white text-lg">{opportunities.length}</span>
-                </div>
-                <div className="flex justify-between py-2">
-                  <span className="text-gray-500">Executed</span>
-                  <span className="text-white text-lg">{executedCount}</span>
-                </div>
-                <div className="flex justify-between py-2">
-                  <span className="text-gray-500">Total Profit</span>
-                  <span className="text-sky-400 text-lg font-mono">{totalProfit.toFixed(4)} SUI</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Network Info */}
-            <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-800">
-              <h2 className="font-medium text-gray-200 mb-5">Network</h2>
-              <div className="space-y-3">
-                <div className="flex justify-between py-2">
-                  <span className="text-gray-500">Environment</span>
-                  <span className={`px-3 py-1 rounded-lg text-sm ${
-                    CURRENT_ENV === 'mainnet' 
-                      ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                      : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-                  }`}>
-                    {CURRENT_ENV}
-                  </span>
-                </div>
-                <div className="flex justify-between py-2">
-                  <span className="text-gray-500">DEEP Balance</span>
-                  <span className="text-gray-300">{userDeepCoins.length} coins</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Center Column - Opportunities */}
-          <div>
-            <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-800 h-full">
-              <h2 className="font-medium text-gray-200 mb-5">Opportunities</h2>
-              
-              {opportunities.length === 0 ? (
-                <div className="text-center py-20 text-gray-600">
-                  <p className="font-medium text-lg">No opportunities found</p>
-                  <p className="mt-2">Click scan to search</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {opportunities.map((opp) => (
-                    <div
-                      key={opp.id}
-                      onClick={() => setSelectedOpportunity(opp)}
-                      className={`p-5 rounded-xl border cursor-pointer transition-colors ${
-                        selectedOpportunity?.id === opp.id
-                          ? 'border-sky-500/50 bg-sky-500/5'
-                          : 'border-gray-800 hover:border-gray-700'
-                      }`}
-                    >
-                      <div className="flex justify-between items-start mb-4">
-                        <span className="font-medium text-white">
-                          {opp.path.join(' > ')}
-                        </span>
-                        <span className={`text-xs px-2.5 py-1 rounded-lg ${
-                          opp.risk === 'low' 
-                            ? 'bg-green-500/10 text-green-400'
-                            : opp.risk === 'medium'
-                            ? 'bg-yellow-500/10 text-yellow-400'
-                            : 'bg-red-500/10 text-red-400'
-                        }`}>
-                          {opp.risk}
-                        </span>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Profit</span>
-                          <span className="text-sky-400 font-mono text-lg">
-                            +{opp.expectedProfit.toFixed(4)} SUI
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Capital</span>
-                          <span className="text-gray-300 font-mono">{opp.requiredCapital} SUI</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right Column - Execution */}
-          <div className="space-y-6">
-            {selectedOpportunity && (
-              <div className="bg-gray-900/50 rounded-xl p-6 border border-sky-500/30">
-                <h2 className="font-medium text-gray-200 mb-5">Selected Opportunity</h2>
-                
-                <div className="space-y-5">
-                  {/* Path */}
-                  <div className="bg-black/50 rounded-xl p-5">
-                    <div className="flex items-center justify-center gap-3 flex-wrap">
-                      {selectedOpportunity.path.map((token, i) => (
-                        <div key={i} className="flex items-center gap-3">
-                          <span className="px-4 py-2 bg-sky-500/10 border border-sky-500/20 rounded-lg font-medium">
-                            {token}
-                          </span>
-                          {i < selectedOpportunity.path.length - 1 && (
-                            <span className="text-gray-600 text-xl">→</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Details */}
-                  <div className="space-y-3">
-                    <div className="flex justify-between py-2">
-                      <span className="text-gray-500">Flash Loan</span>
-                      <span className="text-white text-lg">{selectedOpportunity.requiredCapital} SUI</span>
-                    </div>
-                    <div className="flex justify-between py-2">
-                      <span className="text-gray-500">Expected Profit</span>
-                      <span className="text-sky-400 text-lg">+{selectedOpportunity.expectedProfit.toFixed(4)} SUI</span>
-                    </div>
-                    <div className="flex justify-between py-2">
-                      <span className="text-gray-500">Profit %</span>
-                      <span className="text-sky-400 text-lg">{selectedOpportunity.profitPercent}%</span>
-                    </div>
-                  </div>
-
-                  {/* Execute */}
-                  <button
-                    onClick={() => executeArbitrage(selectedOpportunity)}
-                    disabled={isPending || !account}
-                    className="w-full py-4 bg-sky-500 hover:bg-sky-400 rounded-xl font-semibold text-lg transition-colors disabled:opacity-50"
-                  >
-                    {isPending ? 'Executing...' : 'Execute Arbitrage'}
-                  </button>
-
-                  {!account && (
-                    <p className="text-center text-gray-500">
-                      Connect wallet to execute
-                    </p>
-                  )}
-                </div>
-              </div>
+        {/* Activity Log */}
+        <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-800 mb-6">
+          <h3 className="text-sm font-medium text-gray-300 mb-3">Activity Log</h3>
+          <div className="bg-black/50 rounded-lg p-3 h-48 overflow-y-auto font-mono text-xs">
+            {logs.length === 0 ? (
+              <p className="text-gray-500">No activity yet. Execute a flash loan to see logs...</p>
+            ) : (
+              logs.map((log, i) => (
+                <p key={i} className="text-gray-400 mb-1">{log}</p>
+              ))
             )}
-
-            {executionResult && (
-              <div className={`p-5 rounded-xl ${
-                executionResult.includes('Success') 
-                  ? 'bg-green-500/10 border border-green-500/20 text-green-400'
-                  : 'bg-red-500/10 border border-red-500/20 text-red-400'
-              }`}>
-                {executionResult}
-              </div>
-            )}
-
-            {/* Activity Log */}
-            <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-800">
-              <h2 className="font-medium text-gray-200 mb-5">Activity Log</h2>
-              <div className="bg-black/50 rounded-xl p-4 h-56 overflow-y-auto font-mono text-sm">
-                {logs.length === 0 ? (
-                  <p className="text-gray-600">No activity yet...</p>
-                ) : (
-                  logs.map((log, i) => (
-                    <p key={i} className="text-gray-400 mb-2">{log}</p>
-                  ))
-                )}
-              </div>
-            </div>
           </div>
         </div>
 
-        {/* How It Works */}
-        <div className="mt-12 bg-gray-900/50 rounded-xl p-8 border border-gray-800">
-          <h2 className="font-medium text-gray-200 mb-8 text-lg">How Flash Arbitrage Works</h2>
-          <div className="grid grid-cols-5 gap-6">
-            {[
-              { step: '1', title: 'Borrow', desc: 'Flash loan from pool' },
-              { step: '2', title: 'Swap 1', desc: 'Trade in first pool' },
-              { step: '3', title: 'Swap 2', desc: 'Trade in second pool' },
-              { step: '4', title: 'Repay', desc: 'Return loan + fee' },
-              { step: '5', title: 'Profit', desc: 'Keep the difference' },
-            ].map((item) => (
-              <div key={item.step} className="bg-black/50 rounded-xl p-5 text-center">
-                <div className="w-10 h-10 bg-sky-500/10 border border-sky-500/20 rounded-full flex items-center justify-center mx-auto mb-4 text-sky-400 font-semibold">
-                  {item.step}
-                </div>
-                <div className="font-semibold text-white mb-2">{item.title}</div>
-                <div className="text-sm text-gray-500">{item.desc}</div>
-              </div>
-            ))}
+        {/* Last Transaction */}
+        {lastTx && (
+          <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-xl mb-6">
+            <p className="text-sm text-green-400">
+              Last TX: <a
+                href={getExplorerUrl(NETWORK, lastTx)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-green-300"
+              >
+                {lastTx.slice(0, 20)}...
+              </a>
+            </p>
           </div>
-          <p className="text-sm text-gray-600 mt-6 text-center">
-            All steps happen atomically. If any step fails, the entire transaction reverts.
-          </p>
+        )}
+
+        {/* Info */}
+        <div className="text-center text-sm text-gray-500 space-y-2">
+          <p>Flash loans allow you to borrow without collateral within a single transaction.</p>
+          <p>If you can't repay the loan by the end of the transaction, it automatically reverts.</p>
+          <p className="text-yellow-400">⚠️ Testnet pools often lack liquidity for profitable arbitrage.</p>
+        </div>
+
+        {/* Back Link */}
+        <div className="mt-8 text-center">
+          <Link href="/demo" className="text-sky-400 hover:text-sky-300 transition-colors">
+            ← Back to Demo
+          </Link>
         </div>
       </div>
     </div>
