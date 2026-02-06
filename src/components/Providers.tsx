@@ -1,15 +1,25 @@
-'use client';
+"use client";
 
-import { PropsWithChildren } from 'react';
-import { AuthProvider } from '@/contexts/AuthContext';
-import { DappKitProvider } from '@/components/DappKitProvider';
+import { PropsWithChildren } from "react";
+import { AuthProvider } from "@/contexts/AuthContext";
+import { DappKitProvider } from "@/components/DappKitProvider";
+import { ThemeProvider } from "./Theme-provider";
+import { ModeToggle } from "./ModeToggle";
 
 export function Providers({ children }: PropsWithChildren) {
   return (
-    <DappKitProvider>
-      <AuthProvider>
-        {children}
-      </AuthProvider>
-    </DappKitProvider>
+    <ThemeProvider
+      attribute="class"
+      defaultTheme="system"
+      enableSystem
+      disableTransitionOnChange
+    >
+      <DappKitProvider>
+        <AuthProvider>{children}</AuthProvider>
+        <div className="fixed bottom-4 right-4 z-50">
+          <ModeToggle />
+        </div>
+      </DappKitProvider>
+    </ThemeProvider>
   );
 }
