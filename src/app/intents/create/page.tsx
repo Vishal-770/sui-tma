@@ -2,9 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { hapticFeedback } from '@tma.js/sdk-react';
 
-import { Page } from '@/components/Page';
 import { useAuth } from '@/contexts/AuthContext';
 import { signAndExecuteZkLoginTransaction } from '@/lib/zklogin';
 import { Transaction } from '@mysten/sui/transactions';
@@ -82,11 +80,9 @@ export default function CreateIntentPage() {
   };
 
   const handlePreview = () => {
-    hapticFeedback.impactOccurred.ifAvailable('light');
     const validationError = validateForm();
     if (validationError) {
       setError(validationError);
-      hapticFeedback.notificationOccurred.ifAvailable('error');
       return;
     }
     setError(null);
@@ -96,7 +92,6 @@ export default function CreateIntentPage() {
   const handleSubmit = async () => {
     setIsSubmitting(true);
     setError(null);
-    hapticFeedback.impactOccurred.ifAvailable('medium');
 
     try {
       // Generate unique intent ID
@@ -160,18 +155,15 @@ export default function CreateIntentPage() {
 
       setCreatedIntentId(intentId);
       setStep('success');
-      hapticFeedback.notificationOccurred.ifAvailable('success');
     } catch (err) {
       console.error('Failed to create intent:', err);
       setError(err instanceof Error ? err.message : 'Failed to create intent');
-      hapticFeedback.notificationOccurred.ifAvailable('error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleBack = () => {
-    hapticFeedback.impactOccurred.ifAvailable('light');
     if (step === 'preview') {
       setStep('form');
     } else {
@@ -181,54 +173,51 @@ export default function CreateIntentPage() {
 
   if (isLoading || !session) {
     return (
-      <Page back={false}>
-        <div className="tma-page-centered">
-          <div className="tma-spinner" />
-        </div>
-      </Page>
+      <div className="page-centered">
+        <div className="spinner" />
+      </div>
     );
   }
 
   // Success view
   if (step === 'success') {
     return (
-      <Page back={false}>
-        <div className="tma-page" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 24 }}>
+      <div className="page-container" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 24 }}>
           <div className="animate-fadeIn" style={{ 
             width: 80, 
             height: 80, 
             borderRadius: '50%', 
-            background: 'var(--tma-success-bg)', 
+            background: 'var(--success-muted)', 
             display: 'flex', 
             alignItems: 'center', 
             justifyContent: 'center' 
           }}>
-            <svg style={{ width: 40, height: 40, color: 'var(--tma-success)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg style={{ width: 40, height: 40, color: 'var(--success)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           </div>
           
           <div style={{ textAlign: 'center' }}>
             <h2 style={{ fontSize: 24, fontWeight: 600, marginBottom: 8 }}>Intent Created!</h2>
-            <p style={{ color: 'var(--tma-hint-color)', fontSize: 14 }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>
               Your encrypted trading intent has been submitted
             </p>
           </div>
 
-          <div className="tma-card" style={{ width: '100%', maxWidth: 320 }}>
+          <div className="card" style={{ width: '100%', maxWidth: 320 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-              <span style={{ color: 'var(--tma-hint-color)' }}>Pair</span>
+              <span style={{ color: 'var(--text-muted)' }}>Pair</span>
               <span style={{ fontWeight: 500 }}>{pair.replace('_', '/')}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-              <span style={{ color: 'var(--tma-hint-color)' }}>Trigger</span>
+              <span style={{ color: 'var(--text-muted)' }}>Trigger</span>
               <span style={{ fontWeight: 500 }}>
                 {triggerType === 'price_below' ? '< ' : '> '}${triggerValue}
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-              <span style={{ color: 'var(--tma-hint-color)' }}>Action</span>
-              <span style={{ fontWeight: 500, textTransform: 'uppercase', color: side === 'buy' ? 'var(--tma-success)' : 'var(--tma-error)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Action</span>
+              <span style={{ fontWeight: 500, textTransform: 'uppercase', color: side === 'buy' ? 'var(--success)' : 'var(--error)' }}>
                 {side} {quantity} {pair.split('_')[0]}
               </span>
             </div>
@@ -236,23 +225,23 @@ export default function CreateIntentPage() {
 
           {/* Encryption Verification Card */}
           {encryptionResult && (
-            <div className="tma-card animate-fadeIn" style={{ 
+            <div className="card animate-fadeIn" style={{ 
               width: '100%', 
               maxWidth: 320,
               background: encryptionResult.verification.isRealEncryption 
-                ? 'var(--tma-success-bg)' 
-                : 'var(--tma-warning-bg)',
+                ? 'var(--success-muted)' 
+                : 'var(--warning-muted)',
               border: `1px solid ${encryptionResult.verification.isRealEncryption 
-                ? 'var(--tma-success)' 
-                : 'var(--tma-warning)'}`
+                ? 'var(--success)' 
+                : 'var(--warning)'}`
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                 <svg style={{ 
                   width: 20, 
                   height: 20, 
                   color: encryptionResult.verification.isRealEncryption 
-                    ? 'var(--tma-success)' 
-                    : 'var(--tma-warning)'
+                    ? 'var(--success)' 
+                    : 'var(--warning)'
                 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
                     d={encryptionResult.verification.isRealEncryption 
@@ -270,22 +259,22 @@ export default function CreateIntentPage() {
               
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--tma-hint-color)' }}>Method</span>
+                  <span style={{ color: 'var(--text-muted)' }}>Method</span>
                   <span style={{ fontFamily: 'monospace' }}>{encryptionResult.verification.encryptionMethod}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--tma-hint-color)' }}>Threshold</span>
+                  <span style={{ color: 'var(--text-muted)' }}>Threshold</span>
                   <span style={{ fontFamily: 'monospace' }}>
                     {encryptionResult.verification.threshold}/{encryptionResult.verification.keyServerCount}
                   </span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--tma-hint-color)' }}>Encrypted Size</span>
+                  <span style={{ color: 'var(--text-muted)' }}>Encrypted Size</span>
                   <span style={{ fontFamily: 'monospace' }}>{encryptionResult.verification.encryptedSize} bytes</span>
                 </div>
                 {encryptionResult.verification.isRealEncryption && (
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--tma-hint-color)' }}>Package</span>
+                    <span style={{ color: 'var(--text-muted)' }}>Package</span>
                     <span style={{ fontFamily: 'monospace', fontSize: 10 }}>
                       {encryptionResult.verification.packageId.slice(0, 8)}...{encryptionResult.verification.packageId.slice(-6)}
                     </span>
@@ -298,7 +287,7 @@ export default function CreateIntentPage() {
           <div style={{ display: 'flex', gap: 12, width: '100%', maxWidth: 320 }}>
             <button
               onClick={() => router.push('/intents')}
-              className="tma-btn-secondary"
+              className="btn-secondary"
               style={{ flex: 1 }}
             >
               View Intents
@@ -310,24 +299,22 @@ export default function CreateIntentPage() {
                 setQuantity('');
                 setEncryptionResult(null);
               }}
-              className="tma-btn"
+              className="btn"
               style={{ flex: 1 }}
             >
               Create Another
             </button>
           </div>
         </div>
-      </Page>
     );
   }
 
   // Preview view
   if (step === 'preview') {
     return (
-      <Page back={false}>
-        <div className="tma-page" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className="page-container" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-            <button onClick={handleBack} className="tma-back-btn">
+            <button onClick={handleBack} className="back-btn">
               <svg style={{ width: 24, height: 24 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
@@ -335,47 +322,47 @@ export default function CreateIntentPage() {
             <h1 style={{ fontSize: 20, fontWeight: 600 }}>Confirm Intent</h1>
           </div>
 
-          <div className="tma-card animate-fadeIn">
-            <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16, color: 'var(--tma-hint-color)' }}>
+          <div className="card animate-fadeIn">
+            <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16, color: 'var(--text-muted)' }}>
               Intent Summary
             </h3>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--tma-hint-color)' }}>Trading Pair</span>
+                <span style={{ color: 'var(--text-muted)' }}>Trading Pair</span>
                 <span style={{ fontWeight: 500 }}>{pair.replace('_', '/')}</span>
               </div>
               
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--tma-hint-color)' }}>Trigger Condition</span>
+                <span style={{ color: 'var(--text-muted)' }}>Trigger Condition</span>
                 <span style={{ fontWeight: 500 }}>
                   Price {triggerType === 'price_below' ? 'drops below' : 'rises above'} ${triggerValue}
                 </span>
               </div>
               
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--tma-hint-color)' }}>Order Type</span>
+                <span style={{ color: 'var(--text-muted)' }}>Order Type</span>
                 <span style={{ fontWeight: 500, textTransform: 'capitalize' }}>{orderType}</span>
               </div>
               
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--tma-hint-color)' }}>Action</span>
+                <span style={{ color: 'var(--text-muted)' }}>Action</span>
                 <span style={{ 
                   fontWeight: 600, 
                   textTransform: 'uppercase',
-                  color: side === 'buy' ? 'var(--tma-success)' : 'var(--tma-error)'
+                  color: side === 'buy' ? 'var(--success)' : 'var(--error)'
                 }}>
                   {side} {quantity} {pair.split('_')[0]}
                 </span>
               </div>
               
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--tma-hint-color)' }}>Slippage Tolerance</span>
+                <span style={{ color: 'var(--text-muted)' }}>Slippage Tolerance</span>
                 <span style={{ fontWeight: 500 }}>{(slippageBps / 100).toFixed(2)}%</span>
               </div>
               
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--tma-hint-color)' }}>Expires In</span>
+                <span style={{ color: 'var(--text-muted)' }}>Expires In</span>
                 <span style={{ fontWeight: 500 }}>
                   {EXPIRY_OPTIONS.find(o => o.value === expiryHours)?.label}
                 </span>
@@ -383,29 +370,29 @@ export default function CreateIntentPage() {
             </div>
           </div>
 
-          <div className="tma-card animate-fadeIn" style={{ 
+          <div className="card animate-fadeIn" style={{ 
             animationDelay: '0.1s',
-            background: 'var(--tma-secondary-bg)',
-            border: '1px solid var(--tma-border-color)'
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border)'
           }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
               <div style={{ 
                 width: 32, 
                 height: 32, 
                 borderRadius: 8,
-                background: 'var(--tma-accent-bg)',
+                background: 'var(--accent-muted)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 flexShrink: 0
               }}>
-                <svg style={{ width: 16, height: 16, color: 'var(--tma-accent-color)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg style={{ width: 16, height: 16, color: 'var(--accent)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                 </svg>
               </div>
               <div>
                 <p style={{ fontWeight: 500, marginBottom: 4 }}>End-to-End Encrypted</p>
-                <p style={{ fontSize: 13, color: 'var(--tma-hint-color)' }}>
+                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
                   Your intent will be encrypted using Seal. Only the secure enclave can decrypt and execute it.
                 </p>
               </div>
@@ -413,7 +400,7 @@ export default function CreateIntentPage() {
           </div>
 
           {error && (
-            <div className="tma-error-msg animate-fadeIn">
+            <div className="error-msg animate-fadeIn">
               {error}
             </div>
           )}
@@ -421,7 +408,7 @@ export default function CreateIntentPage() {
           <div style={{ display: 'flex', gap: 12, marginTop: 'auto', paddingTop: 16 }}>
             <button
               onClick={handleBack}
-              className="tma-btn-secondary"
+              className="btn-secondary"
               style={{ flex: 1 }}
               disabled={isSubmitting}
             >
@@ -429,13 +416,13 @@ export default function CreateIntentPage() {
             </button>
             <button
               onClick={handleSubmit}
-              className="tma-btn"
+              className="btn"
               style={{ flex: 2 }}
               disabled={isSubmitting}
             >
               {isSubmitting ? (
                 <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                  <div className="tma-spinner-small" />
+                  <div className="spinner-sm" />
                   Encrypting...
                 </span>
               ) : (
@@ -444,16 +431,14 @@ export default function CreateIntentPage() {
             </button>
           </div>
         </div>
-      </Page>
     );
   }
 
   // Form view
   return (
-    <Page back={false}>
-      <div className="tma-page" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div className="page-container" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-          <button onClick={handleBack} className="tma-back-btn">
+          <button onClick={handleBack} className="back-btn">
             <svg style={{ width: 24, height: 24 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
@@ -462,14 +447,14 @@ export default function CreateIntentPage() {
         </div>
 
         {/* Trading Pair */}
-        <div className="tma-form-group animate-fadeIn">
-          <label className="tma-label">Trading Pair</label>
-          <div className="tma-select-group">
+        <div className="form-group animate-fadeIn">
+          <label className="form-label">Trading Pair</label>
+          <div className="select-group">
             {TRADING_PAIRS.map((p) => (
               <button
                 key={p.value}
-                onClick={() => { setPair(p.value); hapticFeedback.selectionChanged.ifAvailable(); }}
-                className={`tma-select-btn ${pair === p.value ? 'active' : ''}`}
+                onClick={() => setPair(p.value)}
+                className={`select-btn ${pair === p.value ? 'active' : ''}`}
               >
                 {p.label}
               </button>
@@ -478,12 +463,12 @@ export default function CreateIntentPage() {
         </div>
 
         {/* Trigger Condition */}
-        <div className="tma-form-group animate-fadeIn" style={{ animationDelay: '0.05s' }}>
-          <label className="tma-label">Trigger When Price</label>
+        <div className="form-group animate-fadeIn" style={{ animationDelay: '0.05s' }}>
+          <label className="form-label">Trigger When Price</label>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
-              onClick={() => { setTriggerType('price_below'); hapticFeedback.selectionChanged.ifAvailable(); }}
-              className={`tma-toggle-btn ${triggerType === 'price_below' ? 'active' : ''}`}
+              onClick={() => setTriggerType('price_below')}
+              className={`toggle-btn ${triggerType === 'price_below' ? 'active' : ''}`}
               style={{ flex: 1 }}
             >
               <svg style={{ width: 16, height: 16, marginRight: 6 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -492,8 +477,8 @@ export default function CreateIntentPage() {
               Drops Below
             </button>
             <button
-              onClick={() => { setTriggerType('price_above'); hapticFeedback.selectionChanged.ifAvailable(); }}
-              className={`tma-toggle-btn ${triggerType === 'price_above' ? 'active' : ''}`}
+              onClick={() => setTriggerType('price_above')}
+              className={`toggle-btn ${triggerType === 'price_above' ? 'active' : ''}`}
               style={{ flex: 1 }}
             >
               <svg style={{ width: 16, height: 16, marginRight: 6 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -505,16 +490,16 @@ export default function CreateIntentPage() {
         </div>
 
         {/* Trigger Price */}
-        <div className="tma-form-group animate-fadeIn" style={{ animationDelay: '0.1s' }}>
-          <label className="tma-label">Trigger Price (USD)</label>
-          <div className="tma-input-wrapper">
-            <span className="tma-input-prefix">$</span>
+        <div className="form-group animate-fadeIn" style={{ animationDelay: '0.1s' }}>
+          <label className="form-label">Trigger Price (USD)</label>
+          <div className="input-wrapper">
+            <span className="input-prefix">$</span>
             <input
               type="number"
               value={triggerValue}
               onChange={(e) => setTriggerValue(e.target.value)}
               placeholder="0.00"
-              className="tma-input"
+              className="input"
               step="0.0001"
               min="0"
             />
@@ -522,19 +507,19 @@ export default function CreateIntentPage() {
         </div>
 
         {/* Side */}
-        <div className="tma-form-group animate-fadeIn" style={{ animationDelay: '0.15s' }}>
-          <label className="tma-label">Action When Triggered</label>
+        <div className="form-group animate-fadeIn" style={{ animationDelay: '0.15s' }}>
+          <label className="form-label">Action When Triggered</label>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
-              onClick={() => { setSide('buy'); hapticFeedback.selectionChanged.ifAvailable(); }}
-              className={`tma-toggle-btn ${side === 'buy' ? 'active buy' : ''}`}
+              onClick={() => setSide('buy')}
+              className={`toggle-btn ${side === 'buy' ? 'active buy' : ''}`}
               style={{ flex: 1 }}
             >
               BUY
             </button>
             <button
-              onClick={() => { setSide('sell'); hapticFeedback.selectionChanged.ifAvailable(); }}
-              className={`tma-toggle-btn ${side === 'sell' ? 'active sell' : ''}`}
+              onClick={() => setSide('sell')}
+              className={`toggle-btn ${side === 'sell' ? 'active sell' : ''}`}
               style={{ flex: 1 }}
             >
               SELL
@@ -543,22 +528,22 @@ export default function CreateIntentPage() {
         </div>
 
         {/* Quantity */}
-        <div className="tma-form-group animate-fadeIn" style={{ animationDelay: '0.2s' }}>
-          <label className="tma-label">Quantity ({pair.split('_')[0]})</label>
+        <div className="form-group animate-fadeIn" style={{ animationDelay: '0.2s' }}>
+          <label className="form-label">Quantity ({pair.split('_')[0]})</label>
           <input
             type="number"
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
             placeholder="0"
-            className="tma-input"
+            className="input"
             step="0.1"
             min="0"
           />
         </div>
 
         {/* Slippage */}
-        <div className="tma-form-group animate-fadeIn" style={{ animationDelay: '0.25s' }}>
-          <label className="tma-label">Slippage Tolerance: {(slippageBps / 100).toFixed(2)}%</label>
+        <div className="form-group animate-fadeIn" style={{ animationDelay: '0.25s' }}>
+          <label className="form-label">Slippage Tolerance: {(slippageBps / 100).toFixed(2)}%</label>
           <input
             type="range"
             value={slippageBps}
@@ -566,21 +551,21 @@ export default function CreateIntentPage() {
             min="10"
             max="300"
             step="10"
-            className="tma-slider"
+            className="slider"
           />
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--tma-hint-color)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)' }}>
             <span>0.1%</span>
             <span>3%</span>
           </div>
         </div>
 
         {/* Expiry */}
-        <div className="tma-form-group animate-fadeIn" style={{ animationDelay: '0.3s' }}>
-          <label className="tma-label">Intent Expiry</label>
+        <div className="form-group animate-fadeIn" style={{ animationDelay: '0.3s' }}>
+          <label className="form-label">Intent Expiry</label>
           <select
             value={expiryHours}
             onChange={(e) => setExpiryHours(parseInt(e.target.value))}
-            className="tma-select"
+            className="select"
           >
             {EXPIRY_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -591,19 +576,18 @@ export default function CreateIntentPage() {
         </div>
 
         {error && (
-          <div className="tma-error-msg animate-fadeIn">
+          <div className="error-msg animate-fadeIn">
             {error}
           </div>
         )}
 
         <button
           onClick={handlePreview}
-          className="tma-btn"
+          className="btn"
           style={{ marginTop: 'auto', paddingTop: 16 }}
         >
           Preview Intent
         </button>
       </div>
-    </Page>
   );
 }

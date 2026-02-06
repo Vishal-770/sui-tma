@@ -2,89 +2,132 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { hapticFeedback } from '@tma.js/sdk-react';
+import Link from 'next/link';
+import { useCurrentAccount, useDisconnectWallet, useSuiClient } from '@mysten/dapp-kit';
 
-import { Page } from '@/components/Page';
-import { Link } from '@/components/Link/Link';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatAddress, getExplorerUrl } from '@/lib/sui';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { isAuthenticated, isLoading, session, balance, logout, refreshBalance, checkEpochValidity } = useAuth();
+  const { isAuthenticated, isLoading, session, balance: zkBalance, logout, refreshBalance, checkEpochValidity } = useAuth();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
+  
+  // Wallet connection via dapp-kit
+  const dappKitAccount = useCurrentAccount();
+  const { mutate: disconnectWallet } = useDisconnectWallet();
+  const suiClient = useSuiClient();
+  const [walletBalance, setWalletBalance] = useState<string>('0');
 
-  // Redirect if not authenticated
+  // Check if connected via either method
+  const isConnected = isAuthenticated || !!dappKitAccount;
+  const activeAddress = session?.zkLoginAddress || dappKitAccount?.address;
+  const isZkLogin = isAuthenticated && !!session?.zkLoginAddress;
+
+  // Redirect if not connected at all
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
+    if (!isLoading && !isConnected) {
       router.replace('/login');
     }
-  }, [isAuthenticated, isLoading, router]);
+  }, [isConnected, isLoading, router]);
 
-  // Check epoch validity periodically
+  // Check epoch validity periodically (only for zkLogin)
   useEffect(() => {
+    if (!isZkLogin) return;
     const interval = setInterval(() => {
       checkEpochValidity();
     }, 60000);
     return () => clearInterval(interval);
-  }, [checkEpochValidity]);
+  }, [checkEpochValidity, isZkLogin]);
+
+  // Fetch wallet balance for dapp-kit connected wallet
+  useEffect(() => {
+    if (!dappKitAccount?.address || isZkLogin) return;
+    
+    const fetchWalletBalance = async () => {
+      try {
+        const balance = await suiClient.getBalance({ owner: dappKitAccount.address });
+        const sui = (Number(balance.totalBalance) / 1e9).toFixed(4);
+        setWalletBalance(sui);
+      } catch (e) {
+        console.error('Failed to fetch wallet balance:', e);
+      }
+    };
+    
+    fetchWalletBalance();
+  }, [dappKitAccount?.address, suiClient, isZkLogin]);
 
   const handleRefreshBalance = async () => {
     setIsRefreshing(true);
-    hapticFeedback.impactOccurred.ifAvailable('light');
-    await refreshBalance();
+    if (isZkLogin) {
+      await refreshBalance();
+    } else if (dappKitAccount?.address) {
+      try {
+        const balance = await suiClient.getBalance({ owner: dappKitAccount.address });
+        const sui = (Number(balance.totalBalance) / 1e9).toFixed(4);
+        setWalletBalance(sui);
+      } catch (e) {
+        console.error('Failed to refresh wallet balance:', e);
+      }
+    }
     setIsRefreshing(false);
-    hapticFeedback.notificationOccurred.ifAvailable('success');
   };
 
   const handleLogout = () => {
-    hapticFeedback.impactOccurred.ifAvailable('medium');
-    logout();
+    if (isZkLogin) {
+      logout();
+    } else {
+      disconnectWallet();
+    }
     router.replace('/');
   };
 
   const handleCopyAddress = () => {
-    if (session?.zkLoginAddress) {
-      navigator.clipboard.writeText(session.zkLoginAddress);
+    if (activeAddress) {
+      navigator.clipboard.writeText(activeAddress);
       setCopied(true);
-      hapticFeedback.notificationOccurred.ifAvailable('success');
       setTimeout(() => setCopied(false), 2000);
     }
   };
 
-  if (isLoading || !session) {
+  const displayBalance = isZkLogin ? zkBalance : walletBalance;
+
+  if (isLoading || !isConnected) {
     return (
-      <Page back={false}>
-        <div className="tma-page-centered">
-          <div className="tma-spinner" />
-        </div>
-      </Page>
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+      </div>
     );
   }
 
   return (
-    <Page back={false}>
-      <div className="tma-page" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div className="min-h-screen bg-black text-white">
+      <div className="w-full max-w-2xl mx-auto px-4 py-8 flex flex-col gap-6">
+        {/* Back Link */}
+        <div>
+          <Link href="/" className="text-gray-400 hover:text-white text-sm flex items-center gap-2">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            Home
+          </Link>
+        </div>
+
         {/* Wallet Card */}
-        <div className="tma-balance-card animate-fadeIn">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div className="bg-gradient-to-br from-sky-500/10 to-purple-500/10 rounded-2xl p-6 border border-sky-500/20">
+          <div className="flex justify-between items-start mb-6">
             <div>
-              <p className="tma-balance-label">Total Balance</p>
-              <h2 className="tma-balance-value">{balance} SUI</h2>
+              <p className="text-gray-400 text-sm mb-1">Total Balance</p>
+              <h2 className="text-3xl font-bold text-white">{displayBalance} SUI</h2>
             </div>
             <button
               onClick={handleRefreshBalance}
               disabled={isRefreshing}
-              className="tma-address-btn"
-              style={{ padding: 10 }}
+              className="p-2.5 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
             >
               <svg
-                style={{ 
-                  width: 20, 
-                  height: 20,
-                  animation: isRefreshing ? 'spin 0.8s linear infinite' : 'none'
-                }}
+                className={`w-5 h-5 text-gray-400 ${isRefreshing ? 'animate-spin' : ''}`}
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -99,26 +142,26 @@ export default function DashboardPage() {
             </button>
           </div>
 
-          <div className="tma-address">
-            <div style={{ flex: 1, fontFamily: 'monospace', fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {formatAddress(session.zkLoginAddress, 8)}
+          <div className="flex items-center gap-2 p-3 bg-black/30 rounded-lg">
+            <div className="flex-1 font-mono text-sm text-gray-300 truncate">
+              {activeAddress ? formatAddress(activeAddress, 8) : ''}
             </div>
-            <button onClick={handleCopyAddress} className="tma-address-btn">
+            <button onClick={handleCopyAddress} className="p-2 hover:bg-white/10 rounded transition-colors">
               {copied ? (
-                <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               ) : (
-                <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
               )}
             </button>
             <button
-              onClick={() => window.open(getExplorerUrl('address', session.zkLoginAddress), '_blank')}
-              className="tma-address-btn"
+              onClick={() => window.open(getExplorerUrl('address', activeAddress || ''), '_blank')}
+              className="p-2 hover:bg-white/10 rounded transition-colors"
             >
-              <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
               </svg>
             </button>
@@ -126,112 +169,100 @@ export default function DashboardPage() {
         </div>
 
         {/* Quick Actions */}
-        <div className="tma-action-grid animate-fadeIn" style={{ animationDelay: '0.1s' }}>
-          <Link href="/intents/create" className="tma-action-item">
-            <div className="tma-icon tma-icon-green" style={{ margin: '0 auto' }}>
-              <svg style={{ width: 24, height: 24 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Link href="/intents/create" className="p-4 bg-gray-900/50 hover:bg-gray-900 border border-gray-800 hover:border-green-500/30 rounded-xl text-center transition-all group">
+            <div className="w-10 h-10 mx-auto mb-2 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center justify-center text-green-400 group-hover:bg-green-500/20">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
             </div>
-            <p className="tma-action-title">New Intent</p>
-            <p className="tma-action-subtitle">Create trade</p>
+            <p className="font-medium text-sm text-white">New Intent</p>
+            <p className="text-xs text-gray-500 mt-0.5">Create trade</p>
           </Link>
 
-          <Link href="/intents" className="tma-action-item">
-            <div className="tma-icon tma-icon-blue" style={{ margin: '0 auto' }}>
-              <svg style={{ width: 24, height: 24 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <Link href="/intents" className="p-4 bg-gray-900/50 hover:bg-gray-900 border border-gray-800 hover:border-sky-500/30 rounded-xl text-center transition-all group">
+            <div className="w-10 h-10 mx-auto mb-2 bg-sky-500/10 border border-sky-500/20 rounded-lg flex items-center justify-center text-sky-400 group-hover:bg-sky-500/20">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
             </div>
-            <p className="tma-action-title">My Intents</p>
-            <p className="tma-action-subtitle">View active</p>
+            <p className="font-medium text-sm text-white">My Intents</p>
+            <p className="text-xs text-gray-500 mt-0.5">View active</p>
           </Link>
 
-          <Link href="/demo" className="tma-action-item">
-            <div className="tma-icon tma-icon-purple" style={{ margin: '0 auto' }}>
-              <svg style={{ width: 24, height: 24 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <Link href="/demo" className="p-4 bg-gray-900/50 hover:bg-gray-900 border border-gray-800 hover:border-purple-500/30 rounded-xl text-center transition-all group">
+            <div className="w-10 h-10 mx-auto mb-2 bg-purple-500/10 border border-purple-500/20 rounded-lg flex items-center justify-center text-purple-400 group-hover:bg-purple-500/20">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
-            <p className="tma-action-title">Trading Hub</p>
-            <p className="tma-action-subtitle">DeFi demos</p>
+            <p className="font-medium text-sm text-white">Trading Hub</p>
+            <p className="text-xs text-gray-500 mt-0.5">DeFi demos</p>
           </Link>
 
           <button
             onClick={() => window.open('https://faucet.testnet.sui.io/', '_blank')}
-            className="tma-action-item"
-            style={{ border: 'none', cursor: 'pointer' }}
+            className="p-4 bg-gray-900/50 hover:bg-gray-900 border border-gray-800 hover:border-orange-500/30 rounded-xl text-center transition-all group"
           >
-            <div className="tma-icon tma-icon-orange" style={{ margin: '0 auto' }}>
-              <svg style={{ width: 24, height: 24 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="w-10 h-10 mx-auto mb-2 bg-orange-500/10 border border-orange-500/20 rounded-lg flex items-center justify-center text-orange-400 group-hover:bg-orange-500/20">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
-            <p className="tma-action-title">Faucet</p>
-            <p className="tma-action-subtitle">Get testnet SUI</p>
+            <p className="font-medium text-sm text-white">Faucet</p>
+            <p className="text-xs text-gray-500 mt-0.5">Get testnet SUI</p>
           </button>
         </div>
 
         {/* Session Info */}
-        <div className="tma-section animate-fadeIn" style={{ animationDelay: '0.2s' }}>
-          <div className="tma-section-header">Session Info</div>
+        <div className="bg-gray-900/50 rounded-xl border border-gray-800 overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-800">
+            <h3 className="font-medium text-white">Session Info</h3>
+          </div>
           
-          <div className="tma-list-item">
-            <div className="tma-icon-sm tma-icon-green">
-              <svg style={{ width: 16, height: 16 }} fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-              </svg>
-            </div>
-            <div style={{ flex: 1 }}>
-              <p style={{ fontSize: 15, fontWeight: 500 }}>Session Active</p>
-              <p className="tma-hint" style={{ fontSize: 13 }}>Google zkLogin</p>
-            </div>
-            <span className="tma-badge tma-badge-success">Connected</span>
-          </div>
-
-          <div className="tma-list-item">
-            <div className="tma-icon-sm" style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}>
-              <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-            <div style={{ flex: 1 }}>
-              <p style={{ fontSize: 15, fontWeight: 500 }}>Valid Until</p>
-              <p className="tma-hint" style={{ fontSize: 13 }}>Epoch {session.maxEpoch}</p>
-            </div>
-          </div>
-
-          {session.telegramUserId && (
-            <div className="tma-list-item">
-              <div className="tma-icon-sm tma-icon-blue">
-                <svg style={{ width: 16, height: 16 }} fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.161c-.18 1.897-.962 6.502-1.359 8.627-.168.9-.5 1.201-.82 1.23-.697.064-1.226-.461-1.901-.903-1.056-.693-1.653-1.124-2.678-1.8-1.185-.781-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.139-5.062 3.345-.479.329-.913.489-1.302.481-.428-.009-1.252-.242-1.865-.442-.751-.244-1.349-.374-1.297-.789.027-.216.324-.437.893-.663 3.498-1.524 5.831-2.529 6.998-3.015 3.333-1.386 4.025-1.627 4.477-1.635.099-.002.321.023.465.141a.506.506 0 01.171.325c.016.093.036.306.02.472z"/>
+          <div className="p-4 space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-green-500/10 rounded-lg flex items-center justify-center">
+                <svg className="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
               </div>
-              <div style={{ flex: 1 }}>
-                <p style={{ fontSize: 15, fontWeight: 500 }}>Telegram ID</p>
-                <p className="tma-hint" style={{ fontSize: 13 }}>{session.telegramUserId}</p>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-white">Session Active</p>
+                <p className="text-xs text-gray-500">{isZkLogin ? 'Google zkLogin' : 'Wallet Connected'}</p>
               </div>
+              <span className="px-2.5 py-1 text-xs font-medium bg-green-500/10 text-green-400 rounded-full">
+                Connected
+              </span>
             </div>
-          )}
+
+            {isZkLogin && session && (
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 bg-gray-800 rounded-lg flex items-center justify-center">
+                  <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-white">Valid Until</p>
+                  <p className="text-xs text-gray-500">Epoch {session.maxEpoch}</p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Logout Button */}
         <button
           onClick={handleLogout}
-          className="tma-btn tma-btn-full animate-fadeIn"
-          style={{ 
-            background: 'transparent',
-            color: 'var(--tg-theme-destructive-text-color, #ef4444)',
-            animationDelay: '0.3s'
-          }}
+          className="w-full py-3 bg-transparent hover:bg-red-500/10 border border-red-500/30 text-red-400 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors"
         >
-          <svg style={{ width: 20, height: 20 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
           </svg>
-          <span>Sign Out</span>
+          <span>{isZkLogin ? 'Sign Out' : 'Disconnect Wallet'}</span>
         </button>
       </div>
-    </Page>
+    </div>
   );
 }

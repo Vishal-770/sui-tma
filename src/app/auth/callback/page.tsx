@@ -4,7 +4,6 @@ import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 
-import { Page } from '@/components/Page';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   getZkLoginSetup,
@@ -159,7 +158,7 @@ export default function AuthCallbackPage() {
     switch (stepStatus) {
       case 'complete':
         return (
-          <div className="tma-icon-sm tma-icon-green">
+          <div className="icon-box-sm icon-green">
             <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
@@ -167,8 +166,8 @@ export default function AuthCallbackPage() {
         );
       case 'active':
         return (
-          <div className="tma-icon-sm tma-icon-blue" style={{ position: 'relative' }}>
-            <div className="tma-spinner-sm" style={{ 
+          <div className="icon-box-sm icon-blue" style={{ position: 'relative' }}>
+            <div className="spinner-sm" style={{ 
               borderColor: 'rgba(255,255,255,0.3)', 
               borderTopColor: 'white',
               position: 'absolute'
@@ -177,7 +176,7 @@ export default function AuthCallbackPage() {
         );
       case 'error':
         return (
-          <div className="tma-icon-sm tma-icon-red">
+          <div className="icon-box-sm icon-red">
             <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -185,9 +184,9 @@ export default function AuthCallbackPage() {
         );
       default:
         return (
-          <div className="tma-icon-sm" style={{ 
-            background: 'var(--tg-theme-secondary-bg-color)',
-            color: 'var(--tg-theme-hint-color)'
+          <div className="icon-box-sm" style={{ 
+            background: 'var(--bg-secondary)',
+            color: 'var(--text-muted)'
           }}>
             <div style={{ 
               width: 8, 
@@ -202,13 +201,12 @@ export default function AuthCallbackPage() {
   };
 
   return (
-    <Page back={false}>
-      <div className="tma-page-centered" style={{ padding: 20 }}>
+    <div className="page-centered" style={{ padding: 20 }}>
         {/* Header */}
         <div style={{ marginBottom: 32, textAlign: 'center' }}>
           {status === 'processing' && (
             <>
-              <div className="tma-icon animate-float" style={{
+              <div className="icon-box animate-float" style={{
                 width: 64,
                 height: 64,
                 borderRadius: 18,
@@ -221,13 +219,13 @@ export default function AuthCallbackPage() {
                 </svg>
               </div>
               <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 8 }}>Setting up your wallet</h2>
-              <p className="tma-hint">This may take a few moments...</p>
+              <p className="text-muted">This may take a few moments...</p>
             </>
           )}
 
           {status === 'success' && (
             <>
-              <div className="tma-icon" style={{
+              <div className="icon-box" style={{
                 width: 64,
                 height: 64,
                 borderRadius: '50%',
@@ -239,13 +237,13 @@ export default function AuthCallbackPage() {
                 </svg>
               </div>
               <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 8, color: '#16a34a' }}>Success!</h2>
-              <p className="tma-hint">Redirecting to dashboard...</p>
+              <p className="text-muted">Redirecting to dashboard...</p>
             </>
           )}
 
           {status === 'error' && (
             <>
-              <div className="tma-icon" style={{
+              <div className="icon-box" style={{
                 width: 64,
                 height: 64,
                 borderRadius: '50%',
@@ -257,24 +255,24 @@ export default function AuthCallbackPage() {
                 </svg>
               </div>
               <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 8, color: '#dc2626' }}>Authentication Failed</h2>
-              <p className="tma-hint">{error}</p>
+              <p className="text-muted">{error}</p>
             </>
           )}
         </div>
 
         {/* Progress Steps */}
-        <div className="tma-section" style={{ width: '100%', maxWidth: 340 }}>
+        <div className="section" style={{ width: '100%', maxWidth: 340 }}>
           {steps.map((step) => (
-            <div key={step.id} className="tma-list-item">
+            <div key={step.id} className="list-item">
               {getStepIcon(step.status)}
               <span style={{ 
                 fontSize: 15,
                 fontWeight: 500,
                 color: step.status === 'pending' 
-                  ? 'var(--tg-theme-hint-color)' 
+                  ? 'var(--text-muted)' 
                   : step.status === 'error'
                   ? '#dc2626'
-                  : 'var(--tg-theme-text-color)'
+                  : 'var(--text-primary)'
               }}>
                 {step.label}
               </span>
@@ -287,7 +285,7 @@ export default function AuthCallbackPage() {
           <div style={{ marginTop: 24, width: '100%', maxWidth: 340 }}>
             <button
               onClick={() => router.replace('/login')}
-              className="tma-btn tma-btn-primary tma-btn-full"
+              className="btn btn-primary btn-full"
             >
               <svg style={{ width: 20, height: 20 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -297,6 +295,5 @@ export default function AuthCallbackPage() {
           </div>
         )}
       </div>
-    </Page>
   );
 }

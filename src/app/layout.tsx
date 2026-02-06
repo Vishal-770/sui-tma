@@ -1,7 +1,7 @@
 import type { PropsWithChildren } from 'react';
 import type { Metadata } from 'next';
 
-import { Root } from '@/components/Root/Root';
+import { Providers } from '@/components/Providers';
 
 import 'normalize.css/normalize.css';
 import './_assets/globals.css';
@@ -15,7 +15,11 @@ export default async function RootLayout({ children }: PropsWithChildren) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
-        <Root>{children}</Root>
+        <Providers>
+          <div className="app-root">
+            {children}
+          </div>
+        </Providers>
       </body>
     </html>
   );

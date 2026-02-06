@@ -398,8 +398,8 @@ export default function FlashArbitragePage() {
   const borrowPoolInfo = selectedBorrowPool ? getPoolInfo(CONFIG, selectedBorrowPool) : null;
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+    <div className="min-h-screen w-full bg-black text-white">
+      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {/* Header */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
           <div>
