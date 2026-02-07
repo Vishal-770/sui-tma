@@ -3,8 +3,17 @@
 /**
  * Telegram — Sign & Send Deposit
  *
- * Opened when the bot needs the user to sign a deposit transaction.
- * The page connects to the user's NEAR wallet and signs the deposit.
+ * Works in TWO modes:
+ *
+ *   1. **Telegram Mini App** (opened inside Telegram WebView):
+ *      - Wallet connector popups DON'T work in Telegram's WebView.
+ *      - Detects TMA environment and immediately opens the same URL
+ *        in the system browser via WebApp.openLink(), then closes the Mini App.
+ *      - The browser handles the actual wallet connection + signing.
+ *
+ *   2. **System browser** (opened via "Open in Browser" button or redirected from TMA):
+ *      - Uses @hot-labs/near-connect to connect wallet and sign deposit.
+ *      - Reports tx hash back to the server.
  *
  * URL params:
  *   chatId, sig — HMAC-authenticated chat ID
@@ -20,6 +29,38 @@
 import { useEffect, useState, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useNearWallet } from '@/contexts/NearWalletContext';
+
+// Telegram WebApp type
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp: {
+        ready: () => void;
+        close: () => void;
+        sendData: (data: string) => void;
+        openLink: (url: string) => void;
+        initData: string;
+        initDataUnsafe: {
+          user?: { id: number; first_name: string; username?: string };
+          query_id?: string;
+        };
+        MainButton: {
+          text: string;
+          show: () => void;
+          hide: () => void;
+          onClick: (cb: () => void) => void;
+          offClick: (cb: () => void) => void;
+          enable: () => void;
+          disable: () => void;
+          setParams: (params: { color?: string; text_color?: string; text?: string }) => void;
+        };
+        themeParams: Record<string, string | undefined>;
+        expand: () => void;
+        setHeaderColor: (color: string) => void;
+      };
+    };
+  }
+}
 
 type SignStatus = 'idle' | 'signing' | 'submitting' | 'success' | 'error';
 
@@ -40,17 +81,30 @@ function SignDepositContent() {
   const [signStatus, setSignStatus] = useState<SignStatus>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [txHash, setTxHash] = useState('');
-  const [isTelegram, setIsTelegram] = useState(false);
+  const [tmaRedirected, setTmaRedirected] = useState(false);
 
   const isValidParams = Boolean(chatId && sig && depositAddress && amount);
 
-  // Initialize Telegram WebApp
+  // ── TMA detection & redirect ──
+  // If opened inside Telegram's WebView, immediately redirect to the
+  // system browser where the wallet connector actually works.
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
-    if (tg) {
+    if (tg && tg.initData) {
       tg.ready();
       tg.expand();
-      setIsTelegram(true);
+
+      // Build the full URL with all params preserved
+      const currentUrl = window.location.href;
+
+      // Open in system browser
+      tg.openLink(currentUrl);
+      setTmaRedirected(true);
+
+      // Close the Mini App after a brief delay so the user sees the redirect
+      setTimeout(() => {
+        try { tg.close(); } catch { /* ignore */ }
+      }, 1500);
     }
   }, []);
 
@@ -137,9 +191,6 @@ function SignDepositContent() {
         const data = await res.json();
         if (res.ok && data.ok) {
           setSignStatus('success');
-          if (isTelegram) {
-            setTimeout(() => window.Telegram?.WebApp.close(), 3000);
-          }
         } else {
           // Tx went through but server notification failed — still show success
           setSignStatus('success');
@@ -153,8 +204,9 @@ function SignDepositContent() {
       setSignStatus('error');
       setErrorMsg(msg);
     }
-  }, [depositAddress, amount, originAsset, signAndSendTransaction, chatId, sig, isTelegram]);
+  }, [depositAddress, amount, originAsset, signAndSendTransaction, chatId, sig]);
 
+  // ── Invalid params ──
   if (!isValidParams) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -170,6 +222,26 @@ function SignDepositContent() {
     );
   }
 
+  // ── TMA redirect screen ──
+  if (tmaRedirected) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <div className="text-center space-y-4 max-w-sm">
+          <div className="text-5xl">🌐</div>
+          <h1 className="text-xl font-bold">Opening Browser...</h1>
+          <p className="text-sm text-muted-foreground">
+            Signing transactions requires your system browser.
+            The page is opening now — please complete the deposit there.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            This window will close automatically.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Success state ──
   if (signStatus === 'success') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -185,6 +257,7 @@ function SignDepositContent() {
           )}
           <p className="text-sm text-muted-foreground">
             Your swap is being processed. It typically takes 1-5 minutes.
+            Check the bot for updates.
           </p>
           {txHash && (
             <a
@@ -197,15 +270,14 @@ function SignDepositContent() {
             </a>
           )}
           <p className="text-sm text-muted-foreground">
-            {isTelegram
-              ? 'Returning to Telegram...'
-              : 'You can close this page and return to Telegram.'}
+            You can close this page and return to Telegram.
           </p>
         </div>
       </div>
     );
   }
 
+  // ── Browser mode: Wallet connector + sign ──
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm space-y-6 text-center">
@@ -266,7 +338,7 @@ function SignDepositContent() {
         ) : !isConnected ? (
           <div className="space-y-3">
             <p className="text-sm text-amber-400">
-              Please connect your NEAR wallet first.
+              Please connect your NEAR wallet to sign the deposit.
             </p>
             <button
               onClick={connect}
