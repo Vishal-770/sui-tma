@@ -1,63 +1,54 @@
 /**
- * Telegram Webhook API Route
+ * Telegram Webhook API Route — NEAR Intents Swap Bot
  *
- * This handles incoming Telegram updates via webhook.
- * For production, configure webhook URL in Telegram BotFather.
+ * Handles incoming Telegram updates via webhook (serverless).
+ * Uses NearIntentsAgent to parse natural language and execute cross-chain swaps.
+ *
+ * Setup:
+ *   1. Set TELEGRAM_BOT_TOKEN in .env.local
+ *   2. Deploy your app (e.g. to Vercel)
+ *   3. Register webhook:
+ *      curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+ *        -H "Content-Type: application/json" \
+ *        -d '{"url": "https://your-domain.com/api/telegram/webhook"}'
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { NearIntentsAgent, type AgentResponse } from "@/lib/near-intents-agent";
+import {
+  isNearAccountConfigured,
+  getNearAccountId,
+} from "@/lib/near-transactions";
 
-// Check if we have a token configured
+// ============== Config ==============
+
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BOT_ENABLED = Boolean(TELEGRAM_TOKEN);
-// Mini App URL - for Telegram Mini App redirects
-const MINI_APP_URL =
-  process.env.NEXT_PUBLIC_TELEGRAM_MINI_APP_URL ||
-  "https://t.me/DeepIntentBot/app";
 
-// Mock price data
-const MOCK_PRICES: Record<string, number> = {
-  SUI: 1.85,
-  DEEP: 0.12,
-  USDC: 1.0,
-};
+// ============== Agent Pool ==============
 
-// Helper to generate mock transaction hash
-function generateTxHash(): string {
-  return `0x${Array(64)
-    .fill(0)
-    .map(() => Math.floor(Math.random() * 16).toString(16))
-    .join("")}`;
+const agents = new Map<string, NearIntentsAgent>();
+const wallets = new Map<string, string>(); // chatId → wallet address
+const AGENT_POOL_MAX = 500;
+
+function getOrCreateAgent(chatId: string): NearIntentsAgent {
+  let agent = agents.get(chatId);
+  if (!agent) {
+    agent = new NearIntentsAgent();
+    agents.set(chatId, agent);
+    if (agents.size > AGENT_POOL_MAX) {
+      const oldest = agents.keys().next().value;
+      if (oldest) {
+        agents.delete(oldest);
+        wallets.delete(oldest);
+      }
+    }
+  }
+  return agent;
 }
 
-// Helper to parse trading commands
-function parseTradeCommand(
-  text: string,
-): { action: string; amount: number; pair: string } | null {
-  const lower = text.toLowerCase();
+// ============== Telegram API Helpers ==============
 
-  const buyMatch = lower.match(/buy\s+(\d+(?:\.\d+)?)\s*(\w+)?/);
-  if (buyMatch) {
-    return {
-      action: "buy",
-      amount: parseFloat(buyMatch[1]),
-      pair: buyMatch[2]?.toUpperCase() || "SUI",
-    };
-  }
-
-  const sellMatch = lower.match(/sell\s+(\d+(?:\.\d+)?)\s*(\w+)?/);
-  if (sellMatch) {
-    return {
-      action: "sell",
-      amount: parseFloat(sellMatch[1]),
-      pair: sellMatch[2]?.toUpperCase() || "SUI",
-    };
-  }
-
-  return null;
-}
-
-// Send message via Telegram API
 async function sendMessage(
   chatId: number,
   text: string,
@@ -65,707 +56,327 @@ async function sendMessage(
 ) {
   if (!TELEGRAM_TOKEN) return;
 
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: "Markdown",
-      ...options,
-    }),
-  });
-}
-
-// Edit message via Telegram API
-async function editMessage(
-  chatId: number,
-  messageId: number,
-  text: string,
-  options: Record<string, unknown> = {},
-) {
-  if (!TELEGRAM_TOKEN) return;
-
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageText`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      message_id: messageId,
-      text,
-      parse_mode: "Markdown",
-      ...options,
-    }),
-  });
-}
-
-// Answer callback query
-async function answerCallbackQuery(callbackQueryId: string, text?: string) {
-  if (!TELEGRAM_TOKEN) return;
-
-  await fetch(
-    `https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`,
-    {
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        callback_query_id: callbackQueryId,
+        chat_id: chatId,
         text,
+        parse_mode: "Markdown",
+        ...options,
       }),
-    },
+    });
+  } catch (err) {
+    console.error("[Telegram] Failed to send message:", err);
+  }
+}
+
+async function sendChatAction(chatId: number, action = "typing") {
+  if (!TELEGRAM_TOKEN) return;
+  try {
+    await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendChatAction`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, action }),
+      },
+    );
+  } catch {
+    // Ignore typing indicator failures
+  }
+}
+
+async function answerCallbackQuery(callbackQueryId: string, text?: string) {
+  if (!TELEGRAM_TOKEN) return;
+  try {
+    await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
+      },
+    );
+  } catch {
+    // Ignore
+  }
+}
+
+// ============== Formatting ==============
+
+function formatForTelegram(response: AgentResponse): string {
+  let text = response.message;
+
+  // Convert markdown tables → plain text
+  text = text.replace(/\|[^\n]+\|/g, (line) => {
+    if (/^\|[\s\-|]+\|$/.test(line)) return "";
+    const cells = line
+      .split("|")
+      .filter((c) => c.trim())
+      .map((c) => c.trim());
+    if (cells.length === 2) return `  ${cells[0]}: ${cells[1]}`;
+    return cells.join(" | ");
+  });
+
+  text = text.replace(/\n{3,}/g, "\n\n");
+  return text;
+}
+
+function buildKeyboard(suggestedActions?: string[]) {
+  if (!suggestedActions || suggestedActions.length === 0) return undefined;
+
+  const buttons = suggestedActions.map((action) => ({
+    text: action,
+    callback_data: `agent:${action.slice(0, 55)}`,
+  }));
+
+  const rows: { text: string; callback_data: string }[][] = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    rows.push(buttons.slice(i, i + 2));
+  }
+
+  return { inline_keyboard: rows };
+}
+
+// ============== Command Handlers ==============
+
+async function handleStart(chatId: number) {
+  const nearOk = isNearAccountConfigured();
+  const nearAccount = getNearAccountId();
+  const wallet = wallets.get(chatId.toString());
+  const walletLine = wallet
+    ? `✅ Wallet: \`${wallet.slice(0, 10)}...${wallet.slice(-6)}\``
+    : "⚠️ No wallet linked — use /wallet <address>";
+
+  await sendMessage(
+    chatId,
+    `🚀 *Welcome to NEAR Intents Swap Bot!*\n\n` +
+      `Cross-chain token swaps powered by NEAR Intents 1-Click API.\n\n` +
+      `*How to swap — just type naturally:*\n` +
+      `• "swap 0.01 NEAR for SUI"\n` +
+      `• "swap 100 USDC for ETH"\n` +
+      `• "quote 50 USDT to BTC"\n\n` +
+      `*Commands:*\n` +
+      `/swap — Start a swap\n` +
+      `/tokens — Supported tokens\n` +
+      `/status — Check swap status\n` +
+      `/wallet — Link your wallet\n` +
+      `/help — Full guide\n\n` +
+      `*Setup:*\n` +
+      `${nearOk ? `✅ NEAR Account: \`${nearAccount}\`` : "❌ NEAR account not configured"}\n` +
+      `${walletLine}`,
+    { reply_markup: buildKeyboard(["Show tokens", "Help", "Swap 0.01 NEAR for SUI"]) },
   );
 }
 
-// Handle incoming update
-async function handleUpdate(update: Record<string, unknown>) {
-  const message = update.message as Record<string, unknown> | undefined;
-  const callbackQuery = update.callback_query as
-    | Record<string, unknown>
-    | undefined;
+async function handleSwapCommand(chatId: number, args: string) {
+  if (!args) {
+    await sendMessage(
+      chatId,
+      `🔄 *How to Swap*\n\n` +
+        `Type the swap command with amounts:\n` +
+        `• /swap 0.01 NEAR for SUI\n` +
+        `• /swap 100 USDC to ETH\n` +
+        `• /swap 50 USDT for BTC\n\n` +
+        `Or just type without /swap:\n` +
+        `"swap 10 USDC for SUI"`,
+      {
+        reply_markup: buildKeyboard([
+          "Swap 0.01 NEAR for SUI",
+          "Swap 10 USDC for SUI",
+          "Show tokens",
+        ]),
+      },
+    );
+    return;
+  }
 
-  // Handle callback queries (button presses)
-  if (callbackQuery) {
-    const callbackMessage = callbackQuery.message as
-      | Record<string, unknown>
-      | undefined;
-    const chat = callbackMessage?.chat as Record<string, unknown> | undefined;
-    const chatId = chat?.id as number;
-    const messageId = callbackMessage?.message_id as number;
-    const data = callbackQuery.data as string;
-    const queryId = callbackQuery.id as string;
+  await sendChatAction(chatId);
+  const agent = getOrCreateAgent(chatId.toString());
+  const wallet = wallets.get(chatId.toString());
+  const response = await agent.processMessage(`swap ${args}`, wallet);
+  const text = formatForTelegram(response);
 
-    await answerCallbackQuery(queryId);
+  await sendMessage(chatId, truncate(text), {
+    reply_markup: buildKeyboard(response.suggestedActions),
+  });
+}
 
-    // Handle different callback actions
-    if (data?.startsWith("confirm_")) {
-      const [, action, amount, pair] = data.split("_");
-      const txHash = generateTxHash();
-      await editMessage(
+async function handleWalletCommand(chatId: number, address: string) {
+  if (!address) {
+    const existing = wallets.get(chatId.toString());
+    if (existing) {
+      await sendMessage(
         chatId,
-        messageId,
-        `✅ *Trade Executed!*\n\n` +
-          `• ${action?.toUpperCase()} ${amount} ${pair}\n` +
-          `• Status: Success\n\n` +
-          `*Transaction:*\n\`${txHash.slice(0, 20)}...${txHash.slice(-8)}\`\n\n` +
-          `[View on Explorer](https://suiscan.xyz/testnet/tx/${txHash})`,
+        `🔗 *Linked Wallet*\n\n\`${existing}\`\n\nTo change: /wallet <new\\_address>`,
       );
-    } else if (data === "cancel") {
-      await editMessage(chatId, messageId, "🚫 Trade cancelled.");
-    } else if (data === "cmd_limitorder") {
-      await editMessage(
+    } else {
+      await sendMessage(
         chatId,
-        messageId,
-        `🎯 *Create a Limit Order*\n\n` + `*Choose your order type:*`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: "📈 Limit Buy", callback_data: "limit_buy_start" },
-                { text: "📉 Limit Sell", callback_data: "limit_sell_start" },
-              ],
-              [
-                { text: "🛑 Stop Loss", callback_data: "limit_stoploss_start" },
-                {
-                  text: "🎯 Take Profit",
-                  callback_data: "limit_takeprofit_start",
-                },
-              ],
-            ],
-          },
-        },
-      );
-    } else if (data === "cmd_margintrade") {
-      await editMessage(
-        chatId,
-        messageId,
-        `📊 *Margin Trading*\n\n` +
-          `Trade with up to 10x leverage.\n\n` +
-          `💧 SUI/USDC: $${MOCK_PRICES.SUI.toFixed(4)}\n\n` +
-          `*Choose position type:*`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: "🟢 Long (Buy)", callback_data: "margin_long_start" },
-                {
-                  text: "🔴 Short (Sell)",
-                  callback_data: "margin_short_start",
-                },
-              ],
-            ],
-          },
-        },
-      );
-    } else if (data === "cmd_flasharb") {
-      await editMessage(chatId, messageId, "🔍 *Scanning for Arbitrage...*");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await editMessage(
-        chatId,
-        messageId,
-        `⚡ *Flash Arbitrage Opportunities*\n\n` +
-          `*1. SUI/USDC*\n` +
-          `   📈 Spread: 0.42%\n` +
-          `   💰 Est. Profit: $12.50\n` +
-          `   🔄 Route: DeepBook → Cetus\n\n` +
-          `*2. DEEP/SUI*\n` +
-          `   📈 Spread: 0.28%\n` +
-          `   💰 Est. Profit: $8.20\n` +
-          `   🔄 Route: Turbos → DeepBook`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "⚡ Execute #1", callback_data: "flasharb_execute_0" }],
-              [{ text: "⚡ Execute #2", callback_data: "flasharb_execute_1" }],
-              [{ text: "🔄 Refresh", callback_data: "flasharb_refresh" }],
-            ],
-          },
-        },
-      );
-    } else if (data?.match(/^limit_(buy|sell|stoploss|takeprofit)_start$/)) {
-      const orderType = data.split("_")[1];
-      await editMessage(
-        chatId,
-        messageId,
-        `*${orderType.toUpperCase()} Order*\n\n` +
-          `Current SUI Price: $${MOCK_PRICES.SUI.toFixed(4)}\n\n` +
-          `*Select Amount:*`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: "10 SUI", callback_data: `limit_${orderType}_amt_10` },
-                { text: "50 SUI", callback_data: `limit_${orderType}_amt_50` },
-                {
-                  text: "100 SUI",
-                  callback_data: `limit_${orderType}_amt_100`,
-                },
-              ],
-              [{ text: "« Back", callback_data: "cmd_limitorder" }],
-            ],
-          },
-        },
-      );
-    } else if (data?.match(/^limit_(\w+)_amt_(\d+)$/)) {
-      const parts = data.split("_");
-      const orderType = parts[1];
-      const amount = parts[3];
-      const price = MOCK_PRICES.SUI;
-      await editMessage(
-        chatId,
-        messageId,
-        `*${orderType.toUpperCase()} ${amount} SUI*\n\n` +
-          `*Select Trigger Price:*`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: `-5% ($${(price * 0.95).toFixed(2)})`,
-                  callback_data: `limit_confirm_${orderType}_${amount}_${(price * 0.95).toFixed(4)}`,
-                },
-                {
-                  text: `+5% ($${(price * 1.05).toFixed(2)})`,
-                  callback_data: `limit_confirm_${orderType}_${amount}_${(price * 1.05).toFixed(4)}`,
-                },
-              ],
-              [{ text: "« Back", callback_data: "cmd_limitorder" }],
-            ],
-          },
-        },
-      );
-    } else if (data?.match(/^limit_confirm_/)) {
-      const parts = data.split("_");
-      const orderType = parts[2];
-      const amount = parts[3];
-      const price = parts[4];
-
-      await editMessage(chatId, messageId, "⚡ *Creating Order...*");
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-
-      const txHash = generateTxHash();
-      await editMessage(
-        chatId,
-        messageId,
-        `✅ *Limit Order Created!*\n\n` +
-          `• Type: ${orderType.toUpperCase()}\n` +
-          `• Amount: ${amount} SUI\n` +
-          `• Trigger: $${price}\n` +
-          `• Status: Active\n\n` +
-          `*Transaction:*\n\`${txHash.slice(0, 20)}...${txHash.slice(-8)}\`\n\n` +
-          `[View on Explorer](https://suiscan.xyz/testnet/tx/${txHash})`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "📋 View Orders",
-                  url: `${MINI_APP_URL}/trade/limit-orders`,
-                },
-              ],
-              [{ text: "➕ Create Another", callback_data: "cmd_limitorder" }],
-            ],
-          },
-        },
-      );
-    } else if (data?.match(/^margin_(long|short)_start$/)) {
-      const posType = data.split("_")[1];
-      const emoji = posType === "long" ? "🟢" : "🔴";
-      await editMessage(
-        chatId,
-        messageId,
-        `${emoji} *${posType.toUpperCase()} Position*\n\n` +
-          `*Select Leverage:*`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: "2x", callback_data: `margin_${posType}_lev_2` },
-                { text: "5x", callback_data: `margin_${posType}_lev_5` },
-                { text: "10x", callback_data: `margin_${posType}_lev_10` },
-              ],
-              [{ text: "« Back", callback_data: "cmd_margintrade" }],
-            ],
-          },
-        },
-      );
-    } else if (data?.match(/^margin_(\w+)_lev_(\d+)$/)) {
-      const parts = data.split("_");
-      const posType = parts[1];
-      const leverage = parts[3];
-      const price = MOCK_PRICES.SUI;
-      await editMessage(
-        chatId,
-        messageId,
-        `*${posType.toUpperCase()} ${leverage}x*\n\n` +
-          `*Select Position Size:*`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: `50 SUI ($${(50 * price).toFixed(0)})`,
-                  callback_data: `margin_confirm_${posType}_${leverage}_50`,
-                },
-                {
-                  text: `100 SUI ($${(100 * price).toFixed(0)})`,
-                  callback_data: `margin_confirm_${posType}_${leverage}_100`,
-                },
-              ],
-              [{ text: "« Back", callback_data: `margin_${posType}_start` }],
-            ],
-          },
-        },
-      );
-    } else if (data?.match(/^margin_confirm_/)) {
-      const parts = data.split("_");
-      const posType = parts[2];
-      const leverage = parseInt(parts[3]);
-      const size = parseInt(parts[4]);
-      const price = MOCK_PRICES.SUI;
-
-      const positionValue = size * price;
-      const marginRequired = positionValue / leverage;
-      const liquidationPrice =
-        posType === "long"
-          ? price * (1 - 0.9 / leverage)
-          : price * (1 + 0.9 / leverage);
-
-      await editMessage(chatId, messageId, "⚡ *Opening Position...*");
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      const txHash = generateTxHash();
-      const emoji = posType === "long" ? "🟢" : "🔴";
-
-      await editMessage(
-        chatId,
-        messageId,
-        `✅ *Position Opened!*\n\n` +
-          `${emoji} *${posType.toUpperCase()} ${leverage}x*\n\n` +
-          `• Size: ${size} SUI\n` +
-          `• Value: $${positionValue.toFixed(2)}\n` +
-          `• Margin: $${marginRequired.toFixed(2)}\n` +
-          `• Entry: $${price.toFixed(4)}\n` +
-          `• Liq. Price: $${liquidationPrice.toFixed(4)}\n\n` +
-          `*Transaction:*\n\`${txHash.slice(0, 20)}...${txHash.slice(-8)}\`\n\n` +
-          `[View on Explorer](https://suiscan.xyz/testnet/tx/${txHash})`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "📊 View Positions",
-                  url: `${MINI_APP_URL}/trade/margin-trading`,
-                },
-              ],
-              [{ text: "➕ Open Another", callback_data: "cmd_margintrade" }],
-            ],
-          },
-        },
-      );
-    } else if (data?.startsWith("flasharb_execute_")) {
-      const oppIndex = parseInt(data.split("_")[2]);
-      const opportunities = [
-        {
-          pair: "SUI/USDC",
-          spread: 0.42,
-          profit: 12.5,
-          route: "DeepBook → Cetus",
-        },
-        {
-          pair: "DEEP/SUI",
-          spread: 0.28,
-          profit: 8.2,
-          route: "Turbos → DeepBook",
-        },
-      ];
-      const opp = opportunities[oppIndex] || opportunities[0];
-
-      await editMessage(
-        chatId,
-        messageId,
-        `⚡ *Executing Flash Arbitrage...*\n\n${opp.route}`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await editMessage(
-        chatId,
-        messageId,
-        `⚡ *Step 1/4:* Taking flash loan...`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      await editMessage(
-        chatId,
-        messageId,
-        `⚡ *Step 2/4:* Swapping on ${opp.route.split(" → ")[0]}...`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      await editMessage(
-        chatId,
-        messageId,
-        `⚡ *Step 3/4:* Swapping on ${opp.route.split(" → ")[1]}...`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      await editMessage(
-        chatId,
-        messageId,
-        `⚡ *Step 4/4:* Repaying loan + profit...`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 600));
-
-      const txHash = generateTxHash();
-      await editMessage(
-        chatId,
-        messageId,
-        `✅ *Arbitrage Executed!*\n\n` +
-          `• Pair: ${opp.pair}\n` +
-          `• Route: ${opp.route}\n` +
-          `• Spread: ${opp.spread}%\n` +
-          `• Profit: $${opp.profit.toFixed(2)} 💰\n\n` +
-          `*Transaction:*\n\`${txHash.slice(0, 20)}...${txHash.slice(-8)}\`\n\n` +
-          `[View on Explorer](https://suiscan.xyz/testnet/tx/${txHash})`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "⚡ Execute Another",
-                  callback_data: "flasharb_refresh",
-                },
-              ],
-              [
-                {
-                  text: "📊 Arb Dashboard",
-                  url: `${MINI_APP_URL}/trade/flash-arbitrage`,
-                },
-              ],
-            ],
-          },
-        },
-      );
-    } else if (data === "flasharb_refresh") {
-      await editMessage(chatId, messageId, "🔍 *Scanning for Arbitrage...*");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      const spreads = [0.35, 0.48, 0.22, 0.55];
-      const randomSpread = spreads[Math.floor(Math.random() * spreads.length)];
-      await editMessage(
-        chatId,
-        messageId,
-        `⚡ *Flash Arbitrage Opportunities*\n\n` +
-          `*1. SUI/USDC*\n` +
-          `   📈 Spread: ${randomSpread}%\n` +
-          `   💰 Est. Profit: $${(randomSpread * 30).toFixed(2)}\n` +
-          `   🔄 Route: DeepBook → Cetus\n\n` +
-          `*2. DEEP/SUI*\n` +
-          `   📈 Spread: 0.25%\n` +
-          `   💰 Est. Profit: $7.50\n` +
-          `   🔄 Route: Turbos → DeepBook\n\n` +
-          `_Updated: ${new Date().toLocaleTimeString()}_`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "⚡ Execute #1", callback_data: "flasharb_execute_0" }],
-              [{ text: "⚡ Execute #2", callback_data: "flasharb_execute_1" }],
-              [{ text: "🔄 Refresh", callback_data: "flasharb_refresh" }],
-            ],
-          },
-        },
+        `🔗 *Link Your Wallet*\n\nSend your wallet address:\n/wallet 0x1234...abcd\n\nThis is needed so swapped tokens arrive at your wallet.`,
       );
     }
     return;
   }
 
+  if (address.startsWith("0x") && address.length >= 42) {
+    wallets.set(chatId.toString(), address);
+    await sendMessage(
+      chatId,
+      `✅ *Wallet Linked!*\n\nAddress: \`${address.slice(0, 12)}...${address.slice(-8)}\`\n\nTry: "swap 0.01 NEAR for SUI"`,
+      { reply_markup: buildKeyboard(["Swap 0.01 NEAR for SUI", "Show tokens"]) },
+    );
+  } else if (address.endsWith(".near") || address.endsWith(".testnet")) {
+    const nearAccount = getNearAccountId();
+    await sendMessage(
+      chatId,
+      `ℹ️ NEAR account is configured server-side.\nCurrent: \`${nearAccount || "not set"}\`\n\nUse /wallet with your *SUI* or *EVM* address to receive swapped tokens.`,
+    );
+  } else {
+    await sendMessage(
+      chatId,
+      "⚠️ Invalid address format.\n\n• SUI: 0x followed by 64 hex chars\n• EVM: 0x followed by 40 hex chars",
+    );
+  }
+}
+
+function truncate(text: string, max = 4000): string {
+  return text.length > max
+    ? text.slice(0, max - 50) + "\n\n_...message truncated_"
+    : text;
+}
+
+// ============== Update Handler ==============
+
+async function handleUpdate(update: Record<string, unknown>) {
+  // ─── Callback queries (button presses) ─────────────
+  const callbackQuery = update.callback_query as Record<string, unknown> | undefined;
+  if (callbackQuery) {
+    const queryId = callbackQuery.id as string;
+    const data = callbackQuery.data as string;
+    const msg = callbackQuery.message as Record<string, unknown> | undefined;
+    const chat = msg?.chat as Record<string, unknown> | undefined;
+    const chatId = chat?.id as number;
+
+    await answerCallbackQuery(queryId);
+
+    if (!data?.startsWith("agent:") || !chatId) return;
+
+    const actionText = data.slice(6);
+    const agent = getOrCreateAgent(chatId.toString());
+    const wallet = wallets.get(chatId.toString());
+
+    await sendChatAction(chatId);
+    const response = await agent.processMessage(actionText, wallet);
+    await sendMessage(chatId, truncate(formatForTelegram(response)), {
+      reply_markup: buildKeyboard(response.suggestedActions),
+    });
+    return;
+  }
+
+  // ─── Regular messages ──────────────────────────────
+  const message = update.message as Record<string, unknown> | undefined;
   if (!message?.text) return;
 
-  const messageChat = message.chat as Record<string, unknown>;
-  const chatId = messageChat.id as number;
-  const text = message.text as string;
+  const chat = message.chat as Record<string, unknown>;
+  const chatId = chat.id as number;
+  const text = (message.text as string).trim();
 
-  // Handle commands
+  // ── Commands ──
+
   if (text === "/start" || text === "/help") {
+    if (text === "/help") {
+      await sendChatAction(chatId);
+      const agent = getOrCreateAgent(chatId.toString());
+      const wallet = wallets.get(chatId.toString());
+      const response = await agent.processMessage("help", wallet);
+      await sendMessage(chatId, truncate(formatForTelegram(response)), {
+        reply_markup: buildKeyboard(response.suggestedActions),
+      });
+    } else {
+      await handleStart(chatId);
+    }
+    return;
+  }
+
+  if (text.startsWith("/swap")) {
+    const args = text.replace(/^\/swap\s*/, "").trim();
+    await handleSwapCommand(chatId, args);
+    return;
+  }
+
+  if (text.startsWith("/tokens")) {
+    const chain = text.replace(/^\/tokens\s*/, "").trim();
+    const query = chain ? `tokens on ${chain}` : "tokens";
+    await sendChatAction(chatId);
+    const agent = getOrCreateAgent(chatId.toString());
+    const wallet = wallets.get(chatId.toString());
+    const response = await agent.processMessage(query, wallet);
+    await sendMessage(chatId, truncate(formatForTelegram(response)), {
+      reply_markup: buildKeyboard(response.suggestedActions),
+    });
+    return;
+  }
+
+  if (text.startsWith("/status")) {
+    const depositAddr = text.replace(/^\/status\s*/, "").trim();
+    if (!depositAddr) {
+      await sendMessage(
+        chatId,
+        "Usage: /status <deposit\\_address>\n\nPaste the deposit address from your swap to check status.",
+      );
+      return;
+    }
+    await sendChatAction(chatId);
+    const agent = getOrCreateAgent(chatId.toString());
+    const wallet = wallets.get(chatId.toString());
+    const response = await agent.processMessage(`status ${depositAddr}`, wallet);
+    await sendMessage(chatId, truncate(formatForTelegram(response)), {
+      reply_markup: buildKeyboard(response.suggestedActions),
+    });
+    return;
+  }
+
+  if (text.startsWith("/wallet")) {
+    const address = text.replace(/^\/wallet\s*/, "").trim();
+    await handleWalletCommand(chatId, address);
+    return;
+  }
+
+  // Skip other unrecognized commands
+  if (text.startsWith("/")) {
     await sendMessage(
       chatId,
-      `🚀 *Welcome to DeepIntent Bot!*\n\n` +
-        `Your AI-powered DeFi trading assistant on Sui Network.\n\n` +
-        `*🔥 What I Can Do:*\n` +
-        `• Execute limit orders with encrypted intents\n` +
-        `• Margin trading with up to 10x leverage\n` +
-        `• Flash arbitrage across DEXs\n` +
-        `• Natural language trading commands\n\n` +
-        `*📱 Quick Commands:*\n` +
-        `/limitorder - Create a limit order\n` +
-        `/margintrade - Open a leveraged position\n` +
-        `/flasharb - Execute flash arbitrage\n` +
-        `/prices - View current prices\n` +
-        `/balance - Check your balance\n` +
-        `/connect - Link your wallet\n\n` +
-        `*🔐 Connect via zkLogin:*\n` +
-        `Use our Mini App for secure Google/Twitch login!`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🔗 Open Trading App", url: MINI_APP_URL }],
-            [
-              { text: "📊 Limit Order", callback_data: "cmd_limitorder" },
-              { text: "📈 Margin Trade", callback_data: "cmd_margintrade" },
-            ],
-            [{ text: "⚡ Flash Arbitrage", callback_data: "cmd_flasharb" }],
-          ],
-        },
-      },
+      "Unknown command. Try /help for available commands.",
     );
     return;
   }
 
-  if (text === "/limitorder") {
+  // ── Raw wallet address ──
+  if (/^0x[a-fA-F0-9]{40,64}$/.test(text)) {
+    wallets.set(chatId.toString(), text);
     await sendMessage(
       chatId,
-      `🎯 *Create a Limit Order*\n\n` +
-        `Limit orders execute when the price hits your target.\n\n` +
-        `*Choose your order type:*`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: "📈 Limit Buy", callback_data: "limit_buy_start" },
-              { text: "📉 Limit Sell", callback_data: "limit_sell_start" },
-            ],
-            [
-              { text: "🛑 Stop Loss", callback_data: "limit_stoploss_start" },
-              {
-                text: "🎯 Take Profit",
-                callback_data: "limit_takeprofit_start",
-              },
-            ],
-          ],
-        },
-      },
+      `✅ *Wallet Linked!*\n\nAddress: \`${text.slice(0, 12)}...${text.slice(-8)}\`\n\nYou can now do cross-chain swaps!`,
+      { reply_markup: buildKeyboard(["Swap 0.01 NEAR for SUI", "Show tokens"]) },
     );
     return;
   }
 
-  if (text === "/margintrade") {
-    await sendMessage(
-      chatId,
-      `📊 *Margin Trading*\n\n` +
-        `Trade with up to 10x leverage on DeepBook.\n\n` +
-        `*Current Market:*\n` +
-        `💧 SUI/USDC: $${MOCK_PRICES.SUI.toFixed(4)}\n\n` +
-        `*Choose position type:*`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: "🟢 Long (Buy)", callback_data: "margin_long_start" },
-              { text: "🔴 Short (Sell)", callback_data: "margin_short_start" },
-            ],
-            [
-              {
-                text: "📊 View Open Positions",
-                url: `${MINI_APP_URL}/trade/margin-trading`,
-              },
-            ],
-          ],
-        },
-      },
-    );
-    return;
-  }
+  // ── Natural language → Agent ──
+  await sendChatAction(chatId);
+  const agent = getOrCreateAgent(chatId.toString());
+  const wallet = wallets.get(chatId.toString());
+  const response = await agent.processMessage(text, wallet);
 
-  if (text === "/flasharb") {
-    await sendMessage(chatId, "🔍 *Scanning for Arbitrage Opportunities...*");
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    await sendMessage(
-      chatId,
-      `⚡ *Flash Arbitrage Opportunities*\n\n` +
-        `*1. SUI/USDC*\n` +
-        `   📈 Spread: 0.42%\n` +
-        `   💰 Est. Profit: $12.50\n` +
-        `   🔄 Route: DeepBook → Cetus\n\n` +
-        `*2. DEEP/SUI*\n` +
-        `   📈 Spread: 0.28%\n` +
-        `   💰 Est. Profit: $8.20\n` +
-        `   🔄 Route: Turbos → DeepBook\n\n` +
-        `*3. USDC/USDT*\n` +
-        `   📈 Spread: 0.05%\n` +
-        `   💰 Est. Profit: $2.10\n` +
-        `   🔄 Route: DeepBook → FlowX\n\n` +
-        `_Profits shown for $1000 trade size_\n\n` +
-        `⚠️ Flash loans have no liquidation risk!`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "⚡ Execute #1 (SUI)",
-                callback_data: "flasharb_execute_0",
-              },
-            ],
-            [
-              {
-                text: "⚡ Execute #2 (DEEP)",
-                callback_data: "flasharb_execute_1",
-              },
-            ],
-            [{ text: "🔄 Refresh Scan", callback_data: "flasharb_refresh" }],
-          ],
-        },
-      },
-    );
-    return;
-  }
-
-  if (text === "/prices") {
-    const priceList = Object.entries(MOCK_PRICES)
-      .map(([coin, price]) => `• ${coin}: $${price.toFixed(4)}`)
-      .join("\n");
-
-    await sendMessage(
-      chatId,
-      `📊 *Current Prices*\n\n${priceList}\n\n_Updated: ${new Date().toLocaleTimeString()}_`,
-    );
-    return;
-  }
-
-  if (text === "/connect") {
-    await sendMessage(
-      chatId,
-      `🔗 *Connect Your Wallet*\n\n` +
-        `Use zkLogin to connect securely:\n\n` +
-        `1️⃣ Open the Mini App\n` +
-        `2️⃣ Sign in with Google or Twitch\n` +
-        `3️⃣ Your Sui wallet is automatically created!\n\n` +
-        `After connecting, send me your wallet address to link it here.`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🔐 Connect with zkLogin", url: MINI_APP_URL }],
-          ],
-        },
-      },
-    );
-    return;
-  }
-
-  if (text === "/balance") {
-    await sendMessage(
-      chatId,
-      `💰 *Your Balance* (Demo)\n\n` +
-        `• 💧 SUI: 100.0000\n` +
-        `• 🟢 USDC: 250.00\n` +
-        `• 🔵 DEEP: 500.00\n\n` +
-        `_Total: ~$435.00_\n\n` +
-        `Connect your wallet to see real balances!`,
-      {
-        reply_markup: {
-          inline_keyboard: [[{ text: "🔗 Connect Wallet", url: MINI_APP_URL }]],
-        },
-      },
-    );
-    return;
-  }
-
-  // Check for price queries
-  if (text.toLowerCase().includes("price")) {
-    const coinMatch = text.match(/price\s+(\w+)/i);
-    const coin = coinMatch?.[1]?.toUpperCase() || "SUI";
-    const price = MOCK_PRICES[coin] || MOCK_PRICES.SUI;
-
-    await sendMessage(
-      chatId,
-      `💰 *${coin} Price*\n\n` +
-        `Current: $${price.toFixed(4)}\n` +
-        `24h Change: ${(Math.random() * 10 - 5).toFixed(2)}%\n\n` +
-        `_Updated: ${new Date().toLocaleTimeString()}_`,
-    );
-    return;
-  }
-
-  // Check for trade commands
-  const trade = parseTradeCommand(text);
-  if (trade) {
-    const price = MOCK_PRICES[trade.pair] || MOCK_PRICES.SUI;
-    const total = trade.amount * price;
-
-    await sendMessage(
-      chatId,
-      `📋 *Confirm Trade*\n\n` +
-        `• Action: ${trade.action.toUpperCase()}\n` +
-        `• Amount: ${trade.amount} ${trade.pair}\n` +
-        `• Price: $${price.toFixed(4)}\n` +
-        `• Total: $${total.toFixed(2)}\n\n` +
-        `Tap confirm to execute:`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "✅ Confirm",
-                callback_data: `confirm_${trade.action}_${trade.amount}_${trade.pair}`,
-              },
-              { text: "❌ Cancel", callback_data: "cancel" },
-            ],
-          ],
-        },
-      },
-    );
-    return;
-  }
-
-  // Default response
-  await sendMessage(
-    chatId,
-    `🤔 I can help you with:\n\n` +
-      `*DeFi Commands:*\n` +
-      `/limitorder - Create limit orders\n` +
-      `/margintrade - Leveraged trading\n` +
-      `/flasharb - Flash arbitrage\n\n` +
-      `*Trading:*\n` +
-      `• "buy 10 SUI"\n` +
-      `• "sell 5 SUI"\n` +
-      `• "price SUI"\n\n` +
-      `Try /start for the full menu!`,
-  );
+  await sendMessage(chatId, truncate(formatForTelegram(response)), {
+    reply_markup: buildKeyboard(response.suggestedActions),
+  });
 }
+
+// ============== Route Handlers ==============
 
 export async function POST(req: NextRequest) {
   if (!BOT_ENABLED) {
@@ -777,7 +388,7 @@ export async function POST(req: NextRequest) {
     await handleUpdate(update);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    console.error("Webhook error:", error);
+    console.error("[Telegram Webhook] Error:", error);
     return NextResponse.json({ error: "Webhook error" }, { status: 500 });
   }
 }
@@ -785,15 +396,15 @@ export async function POST(req: NextRequest) {
 export async function GET() {
   return NextResponse.json({
     ok: true,
-    bot: "DeepIntent Bot",
-    version: "2.0.0",
+    bot: "NEAR Intents Swap Bot",
+    version: "3.0.0",
     enabled: BOT_ENABLED,
-    mode: process.env.NEXT_PUBLIC_DEMO_MODE === "true" ? "demo" : "live",
+    nearAccount: isNearAccountConfigured() ? getNearAccountId() : null,
     features: [
-      "limit-orders",
-      "margin-trading",
-      "flash-arbitrage",
+      "cross-chain-swaps",
       "natural-language",
+      "near-intents-1click",
+      "auto-execution",
     ],
   });
 }
