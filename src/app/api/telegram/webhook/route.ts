@@ -25,10 +25,12 @@ import {
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BOT_ENABLED = Boolean(TELEGRAM_TOKEN);
 
-// ============== Agent Pool ==============
+// ============== Agent Pool & Credentials ==============
 
 const agents = new Map<string, NearIntentsAgent>();
 const wallets = new Map<string, string>(); // chatId → wallet address
+/** Per-user NEAR credentials (in-memory, cleared on redeploy) */
+const nearCreds = new Map<string, { accountId: string; privateKey: string }>();
 const AGENT_POOL_MAX = 500;
 
 function getOrCreateAgent(chatId: string): NearIntentsAgent {
@@ -41,10 +43,23 @@ function getOrCreateAgent(chatId: string): NearIntentsAgent {
       if (oldest) {
         agents.delete(oldest);
         wallets.delete(oldest);
+        nearCreds.delete(oldest);
       }
     }
   }
   return agent;
+}
+
+/** Build agent options from per-user state */
+function getAgentOpts(chatId: string) {
+  const wallet = wallets.get(chatId);
+  const creds = nearCreds.get(chatId);
+  return {
+    userAddress: wallet,
+    nearAccountId: creds?.accountId,
+    nearPrivateKey: creds?.privateKey,
+    executionMode: (creds?.privateKey ? 'auto' : 'manual') as 'auto' | 'manual',
+  };
 }
 
 // ============== Telegram API Helpers ==============
@@ -146,9 +161,16 @@ async function handleStart(chatId: number) {
   const nearOk = isNearAccountConfigured();
   const nearAccount = getNearAccountId();
   const wallet = wallets.get(chatId.toString());
+  const creds = nearCreds.get(chatId.toString());
   const walletLine = wallet
     ? `✅ Wallet: \`${wallet.slice(0, 10)}...${wallet.slice(-6)}\``
     : "⚠️ No wallet linked — use /wallet <address>";
+
+  const nearStatus = creds
+    ? `✅ Your NEAR Account: \`${creds.accountId}\` (auto-execution)`
+    : nearOk
+      ? `ℹ️ Server NEAR Account: \`${nearAccount}\``
+      : "❌ No NEAR account — use /import to add yours";
 
   await sendMessage(
     chatId,
@@ -163,9 +185,11 @@ async function handleStart(chatId: number) {
       `/tokens — Supported tokens\n` +
       `/status — Check swap status\n` +
       `/wallet — Link your wallet\n` +
+      `/import — Import NEAR account\n` +
+      `/delete — Remove NEAR account\n` +
       `/help — Full guide\n\n` +
       `*Setup:*\n` +
-      `${nearOk ? `✅ NEAR Account: \`${nearAccount}\`` : "❌ NEAR account not configured"}\n` +
+      `${nearStatus}\n` +
       `${walletLine}`,
     { reply_markup: buildKeyboard(["Show tokens", "Help", "Swap 0.01 NEAR for SUI"]) },
   );
@@ -195,8 +219,8 @@ async function handleSwapCommand(chatId: number, args: string) {
 
   await sendChatAction(chatId);
   const agent = getOrCreateAgent(chatId.toString());
-  const wallet = wallets.get(chatId.toString());
-  const response = await agent.processMessage(`swap ${args}`, wallet);
+  const opts = getAgentOpts(chatId.toString());
+  const response = await agent.processMessage(`swap ${args}`, opts);
   const text = formatForTelegram(response);
 
   await sendMessage(chatId, truncate(text), {
@@ -266,10 +290,10 @@ async function handleUpdate(update: Record<string, unknown>) {
 
     const actionText = data.slice(6);
     const agent = getOrCreateAgent(chatId.toString());
-    const wallet = wallets.get(chatId.toString());
+    const opts = getAgentOpts(chatId.toString());
 
     await sendChatAction(chatId);
-    const response = await agent.processMessage(actionText, wallet);
+    const response = await agent.processMessage(actionText, opts);
     await sendMessage(chatId, truncate(formatForTelegram(response)), {
       reply_markup: buildKeyboard(response.suggestedActions),
     });
@@ -290,8 +314,8 @@ async function handleUpdate(update: Record<string, unknown>) {
     if (text === "/help") {
       await sendChatAction(chatId);
       const agent = getOrCreateAgent(chatId.toString());
-      const wallet = wallets.get(chatId.toString());
-      const response = await agent.processMessage("help", wallet);
+      const opts = getAgentOpts(chatId.toString());
+      const response = await agent.processMessage("help", opts);
       await sendMessage(chatId, truncate(formatForTelegram(response)), {
         reply_markup: buildKeyboard(response.suggestedActions),
       });
@@ -312,8 +336,8 @@ async function handleUpdate(update: Record<string, unknown>) {
     const query = chain ? `tokens on ${chain}` : "tokens";
     await sendChatAction(chatId);
     const agent = getOrCreateAgent(chatId.toString());
-    const wallet = wallets.get(chatId.toString());
-    const response = await agent.processMessage(query, wallet);
+    const opts = getAgentOpts(chatId.toString());
+    const response = await agent.processMessage(query, opts);
     await sendMessage(chatId, truncate(formatForTelegram(response)), {
       reply_markup: buildKeyboard(response.suggestedActions),
     });
@@ -331,8 +355,8 @@ async function handleUpdate(update: Record<string, unknown>) {
     }
     await sendChatAction(chatId);
     const agent = getOrCreateAgent(chatId.toString());
-    const wallet = wallets.get(chatId.toString());
-    const response = await agent.processMessage(`status ${depositAddr}`, wallet);
+    const opts = getAgentOpts(chatId.toString());
+    const response = await agent.processMessage(`status ${depositAddr}`, opts);
     await sendMessage(chatId, truncate(formatForTelegram(response)), {
       reply_markup: buildKeyboard(response.suggestedActions),
     });
@@ -342,6 +366,37 @@ async function handleUpdate(update: Record<string, unknown>) {
   if (text.startsWith("/wallet")) {
     const address = text.replace(/^\/wallet\s*/, "").trim();
     await handleWalletCommand(chatId, address);
+    return;
+  }
+
+  // /import <accountId> <privateKey>
+  if (text.startsWith("/import")) {
+    const parts = text.replace(/^\/import\s*/, "").trim().split(/\s+/);
+    if (parts.length < 2) {
+      await sendMessage(chatId, "Usage: /import <nearAccountId> <privateKey>\n\nExample:\n/import alice.near ed25519:5abc...\n\n⚠️ Your message will be auto-deleted for safety.");
+      return;
+    }
+    const [accountId, privateKey] = parts;
+    // Auto-delete the user's message containing the private key
+    try {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, message_id: (message as Record<string, unknown>).message_id }),
+      });
+    } catch { /* best effort */ }
+    nearCreds.set(chatId.toString(), { accountId, privateKey });
+    await sendMessage(chatId, `✅ *NEAR Account Imported*\n\nAccount: \`${accountId}\`\nAuto-execution: enabled\n\n🔒 Credentials stored in memory only (cleared on server restart).\n⚠️ Your message was deleted for security.`, {
+      reply_markup: buildKeyboard(["Swap 0.01 NEAR for SUI", "Show tokens"]),
+    });
+    return;
+  }
+
+  // /delete — remove imported NEAR credentials
+  if (text === "/delete") {
+    const had = nearCreds.has(chatId.toString());
+    nearCreds.delete(chatId.toString());
+    await sendMessage(chatId, had ? "✅ NEAR credentials removed." : "ℹ️ No imported credentials to remove.");
     return;
   }
 
@@ -368,8 +423,8 @@ async function handleUpdate(update: Record<string, unknown>) {
   // ── Natural language → Agent ──
   await sendChatAction(chatId);
   const agent = getOrCreateAgent(chatId.toString());
-  const wallet = wallets.get(chatId.toString());
-  const response = await agent.processMessage(text, wallet);
+  const opts = getAgentOpts(chatId.toString());
+  const response = await agent.processMessage(text, opts);
 
   await sendMessage(chatId, truncate(formatForTelegram(response)), {
     reply_markup: buildKeyboard(response.suggestedActions),

@@ -33,10 +33,32 @@ export type MessageType =
   | 'quote'
   | 'live_quote'
   | 'execution'
+  | 'deposit_needed'
   | 'status'
   | 'error'
   | 'help'
   | 'chains';
+
+/**
+ * Options for processMessage.
+ * Allows passing wallet info for dynamic per-user accounts.
+ */
+export interface ProcessMessageOptions {
+  /** Connected SUI/EVM wallet address (for receiving tokens) */
+  userAddress?: string;
+  /** User's NEAR account ID (from wallet input, wallet selector, or import) */
+  nearAccountId?: string;
+  /** User's NEAR private key (from account import — Telegram or website power-user) */
+  nearPrivateKey?: string;
+  /**
+   * Execution mode for NEAR-origin swaps:
+   * - 'auto'        → Server executes deposit automatically (env vars or imported keys)
+   * - 'client-sign' → Return deposit info, client will sign with connected wallet
+   * - 'manual'      → Return deposit info & instructions for manual send
+   * If not set, inferred from available credentials.
+   */
+  executionMode?: 'auto' | 'client-sign' | 'manual';
+}
 
 export interface AgentMessage {
   id: string;
@@ -395,16 +417,31 @@ export class NearIntentsAgent {
 
   /**
    * Process a user message and return an agent response.
+   *
+   * @param message   Natural language input.
+   * @param options   Wallet context — or a plain string (legacy: treated as userAddress).
    */
   async processMessage(
     message: string,
-    userAddress?: string
+    options?: ProcessMessageOptions | string
   ): Promise<AgentResponse> {
+    // Backward compatibility: if options is a string, treat as userAddress
+    const opts: ProcessMessageOptions =
+      typeof options === 'string' ? { userAddress: options } : options ?? {};
+
     const intent = parseIntent(message);
+
+    // Special handler: "deposit_sent <txHash> <depositAddress>"
+    const depositSentMatch = message.match(
+      /deposit_sent\s+([A-Za-z0-9]+)\s+([A-Za-z0-9._-]+)/i
+    );
+    if (depositSentMatch) {
+      return this.handleDepositSent(depositSentMatch[1], depositSentMatch[2]);
+    }
 
     switch (intent.action) {
       case 'help':
-        return this.handleHelp();
+        return this.handleHelp(opts);
 
       case 'tokens':
         return this.handleTokens(intent.chainIn);
@@ -413,19 +450,19 @@ export class NearIntentsAgent {
         return this.handleChains();
 
       case 'swap':
-        return this.handleSwapQuote(intent, userAddress, false);
+        return this.handleSwapQuote(intent, opts, false);
 
       case 'quote':
-        return this.handleSwapQuote(intent, userAddress, true);
+        return this.handleSwapQuote(intent, opts, true);
 
       case 'confirm':
-        return this.handleConfirm(userAddress);
+        return this.handleConfirm(opts);
 
       case 'status':
         return this.handleStatus(intent.depositAddress);
 
       case 'balance':
-        return this.handleBalance(userAddress);
+        return this.handleBalance(opts);
 
       case 'unknown':
       default:
@@ -433,16 +470,24 @@ export class NearIntentsAgent {
     }
   }
 
-  private handleHelp(): AgentResponse {
+  private handleHelp(opts: ProcessMessageOptions = {}): AgentResponse {
     const nearConfigured = isNearAccountConfigured();
     const nearAccount = getNearAccountId();
+    const userNear = opts.nearAccountId;
+
+    let setupInfo = '';
+    if (userNear) {
+      setupInfo = `🔑 **Your NEAR Account:** \`${userNear}\`\n`;
+    } else if (nearConfigured) {
+      setupInfo = `🔑 **Server NEAR Account:** \`${nearAccount}\` (auto-execution enabled)\n`;
+    }
 
     return {
       message: `👋 **Welcome to the NEAR Intents Agent!**
 
 I can help you perform cross-chain swaps using NEAR Intents, with a focus on the SUI ecosystem.
 
-${nearConfigured ? `🔑 **NEAR Account:** \`${nearAccount}\` (auto-execution enabled)\n` : ''}
+${setupInfo}
 
 **Here's what I can do:**
 
@@ -454,15 +499,17 @@ ${nearConfigured ? `🔑 **NEAR Account:** \`${nearAccount}\` (auto-execution en
 💼 **Balance** — "Balance"
 
 **Example commands:**
-• \`swap 0.1 NEAR for SUI\` — executes automatically from NEAR account
+• \`swap 0.1 NEAR for SUI\` — executes automatically from ${userNear ? 'your' : 'configured'} NEAR account
 • \`buy SUI with 50 USDC\`
 • \`quote 1000 USDT to ETH\`
 • \`tokens on sui\`
 • \`chains\`
 
-${nearConfigured
+${userNear
+  ? '🚀 **Your NEAR wallet is connected!** Swaps from NEAR will use your account.'
+  : nearConfigured
   ? '🚀 **Auto-execution is ON!** Swaps from NEAR will be executed automatically when you confirm.'
-  : '⚠️ Configure SENDER_NEAR_ACCOUNT in .env.local to enable auto-execution.'}
+  : '💡 **Tip:** Enter your NEAR account ID to enable swaps from NEAR, or just get quotes and deposit manually.'}
 
 I support cross-chain swaps across 15+ blockchains including SUI, NEAR, Ethereum, Arbitrum, Solana, Bitcoin, and more!`,
       type: 'help',
@@ -563,10 +610,12 @@ I support cross-chain swaps across 15+ blockchains including SUI, NEAR, Ethereum
 
   private async handleSwapQuote(
     intent: ParsedIntent,
-    userAddress?: string,
+    opts: ProcessMessageOptions,
     dryRun = true
   ): Promise<AgentResponse> {
     const { tokenIn, tokenOut, amountIn, chainIn, chainOut } = intent;
+    const userAddress = opts.userAddress;
+    const userNearAccountId = opts.nearAccountId;
 
     // Validate required fields
     if (!tokenIn || !tokenOut) {
@@ -628,9 +677,11 @@ I support cross-chain swaps across 15+ blockchains including SUI, NEAR, Ethereum
       // recipient: must be valid on the DESTINATION chain (where tokens go)
       //
       // userAddress is the connected wallet (e.g. SUI hex address: 0x + 64 hex = 66 chars)
-      // getNearAccountId() is the configured NEAR account (e.g. naveen6087.near)
+      // userNearAccountId is the user's own NEAR wallet (from input/import/wallet selector)
+      // getNearAccountId() is the server-configured NEAR account (e.g. naveen6087.near)
       // EVM addresses are 0x + 40 hex = 42 chars
-      const nearAccountId = getNearAccountId();
+      const serverNearAccountId = getNearAccountId();
+      const nearAccountId = userNearAccountId || serverNearAccountId;
       const originChain = originToken.blockchain.toLowerCase();
       const destChain = destToken.blockchain.toLowerCase();
 
@@ -645,7 +696,7 @@ I support cross-chain swaps across 15+ blockchains including SUI, NEAR, Ethereum
 
       console.log(`[Agent] Token resolution: ${tokenIn} → ${originToken.symbol} on ${originToken.blockchain} (${originToken.assetId})`);
       console.log(`[Agent] Token resolution: ${tokenOut} → ${destToken.symbol} on ${destToken.blockchain} (${destToken.assetId})`);
-      console.log(`[Agent] Address context: userAddress=${userAddress?.slice(0, 12)}..., nearAccount=${nearAccountId}, originChain=${originChain}, destChain=${destChain}`);
+      console.log(`[Agent] Address context: userAddress=${userAddress?.slice(0, 12)}..., nearAccount=${nearAccountId}, userNearAccount=${userNearAccountId || 'none'}, originChain=${originChain}, destChain=${destChain}`);
 
       // Determine refund address (ORIGIN chain)
       let refundAddress: string;
@@ -754,6 +805,15 @@ I support cross-chain swaps across 15+ blockchains including SUI, NEAR, Ethereum
         ? `$${(parseFloat(q.amountInUsd) - parseFloat(q.amountOutUsd)).toFixed(4)}`
         : 'N/A';
 
+      // Determine execution capability
+      const canAutoExecute =
+        originToken.blockchain === 'near' &&
+        (opts.nearPrivateKey ? true : isNearAccountConfigured());
+      const canClientSign =
+        originToken.blockchain === 'near' &&
+        !!userNearAccountId &&
+        opts.executionMode === 'client-sign';
+
       const message = `📊 **Swap Quote**
 
 | | Token | Amount | USD |
@@ -765,13 +825,17 @@ I support cross-chain swaps across 15+ blockchains including SUI, NEAR, Ethereum
 **Route:** ${originToken.blockchain} → NEAR Intents → ${destToken.blockchain}
 **Slippage Tolerance:** 1%
 
-${originToken.blockchain === 'near' && isNearAccountConfigured()
-  ? '🚀 I can **auto-execute** this swap from the configured NEAR account. Say **"confirm"** to proceed!'
-  : !userAddress
-    ? '⚠️ Connect your wallet to execute this swap.'
-    : dryRun
-      ? '💡 Say **"confirm"** or **"execute"** to proceed with this swap.'
-      : ''}`;
+${canAutoExecute
+  ? `🚀 I can **auto-execute** this swap from \`${nearAccountId}\`. Say **"confirm"** to proceed!`
+  : canClientSign
+    ? `🔐 I'll prepare the deposit transaction for you to sign with your NEAR wallet (\`${userNearAccountId}\`). Say **"confirm"** to proceed!`
+    : userNearAccountId
+      ? `💡 Say **"confirm"** to get the deposit address. Then send your tokens manually from \`${userNearAccountId}\`.`
+      : !userAddress
+        ? '⚠️ Connect your wallet to execute this swap.'
+        : dryRun
+          ? '💡 Say **"confirm"** or **"execute"** to proceed with this swap.'
+          : ''}`;
 
       return {
         message,
@@ -785,7 +849,9 @@ ${originToken.blockchain === 'near' && isNearAccountConfigured()
           destChain: destToken.blockchain,
           originAsset: originToken.assetId,
           destAsset: destToken.assetId,
-          canAutoExecute: originToken.blockchain === 'near' && isNearAccountConfigured(),
+          canAutoExecute,
+          canClientSign,
+          nearAccountId,
         },
         suggestedActions: ['Confirm swap', 'Get a different quote', 'Cancel'],
       };
@@ -798,7 +864,7 @@ ${originToken.blockchain === 'near' && isNearAccountConfigured()
     }
   }
 
-  private async handleConfirm(userAddress?: string): Promise<AgentResponse> {
+  private async handleConfirm(opts: ProcessMessageOptions): Promise<AgentResponse> {
     if (!this.pendingQuote) {
       return {
         message: 'No pending quote to confirm. Get a quote first by saying something like "swap 100 USDC for SUI".',
@@ -808,26 +874,37 @@ ${originToken.blockchain === 'near' && isNearAccountConfigured()
     }
 
     const isNearOrigin = this.pendingQuote.originChain === 'near';
-    const hasNearAccount = isNearAccountConfigured();
+    const hasServerAccount = isNearAccountConfigured();
+    const hasImportedKeys = !!opts.nearPrivateKey && !!opts.nearAccountId;
+    const isClientSign = opts.executionMode === 'client-sign' && !!opts.nearAccountId;
 
-    // If origin is on NEAR and we have a NEAR account, auto-execute
-    if (isNearOrigin && hasNearAccount) {
-      return this.handleAutoExecute(userAddress);
+    // Determine execution path:
+    // 1. Imported keys (Telegram or website power-user) → auto-execute with custom credentials
+    // 2. Client-side wallet (website with wallet selector) → return deposit_needed
+    // 3. Server NEAR account (env vars) → auto-execute with server credentials
+    // 4. None of the above → manual deposit
+    if (isNearOrigin && hasImportedKeys) {
+      return this.handleAutoExecuteWithCredentials(opts);
+    }
+    if (isNearOrigin && isClientSign) {
+      return this.handleClientSideDeposit(opts);
+    }
+    if (isNearOrigin && hasServerAccount) {
+      return this.handleAutoExecute(opts);
     }
 
-    // Otherwise, fall back to showing deposit address for manual deposit
-    return this.handleManualDeposit(userAddress);
+    // Fall back to manual deposit (show deposit address + instructions)
+    return this.handleManualDeposit(opts);
   }
 
   /**
-   * Auto-execute a swap by sending the deposit from the configured NEAR account.
+   * Auto-execute a swap by sending the deposit from the server-configured NEAR account.
    */
-  private async handleAutoExecute(userAddress?: string): Promise<AgentResponse> {
+  private async handleAutoExecute(opts: ProcessMessageOptions): Promise<AgentResponse> {
     if (!this.pendingQuote) {
       return { message: 'No pending quote.', type: 'error' };
     }
 
-    const recipientAddress = userAddress || this.pendingQuote.recipientAddress;
     const nearAccountId = getNearAccountId();
 
     try {
@@ -850,7 +927,6 @@ Please wait while the transaction is being processed...`;
       this.lastExecutionResult = result;
 
       if (!result.success) {
-        // Clear pending quote on failure
         this.pendingQuote = null;
         return {
           message: `❌ **Swap Failed**\n\n${result.error || 'Unknown error occurred during swap execution.'}\n\nPlease try again with a new quote.`,
@@ -861,10 +937,10 @@ Please wait while the transaction is being processed...`;
 
       const pendingData = { ...this.pendingQuote };
       this.pendingQuote = null;
-
       const q = result.quote?.quote;
 
-      const executionMessage = `✅ **Swap Executed Successfully!**
+      return {
+        message: `✅ **Swap Executed Successfully!**
 
 | | Details |
 |---|---|
@@ -880,10 +956,7 @@ Please wait while the transaction is being processed...`;
 📊 You can track the progress:
 • Say **"status ${result.depositAddress}"** to check
 • 🔗 [NEAR Intents Explorer](${result.explorerUrl})
-• 🔗 [NearBlocks TX](${result.nearBlocksUrl})`;
-
-      return {
-        message: executionMessage,
+• 🔗 [NearBlocks TX](${result.nearBlocksUrl})`,
         type: 'execution',
         data: {
           depositAddress: result.depositAddress,
@@ -909,18 +982,203 @@ Please wait while the transaction is being processed...`;
   }
 
   /**
-   * Show deposit address for manual deposit (non-NEAR origins).
+   * Auto-execute with user-imported NEAR credentials (Telegram /import or website import).
    */
-  private async handleManualDeposit(userAddress?: string): Promise<AgentResponse> {
+  private async handleAutoExecuteWithCredentials(opts: ProcessMessageOptions): Promise<AgentResponse> {
+    if (!this.pendingQuote || !opts.nearAccountId || !opts.nearPrivateKey) {
+      return { message: 'No pending quote or missing credentials.', type: 'error' };
+    }
+
+    try {
+      const { executeSwapWithCredentials } = await import('./near-transactions');
+
+      const result = await executeSwapWithCredentials(
+        {
+          originAsset: this.pendingQuote.originAsset,
+          destinationAsset: this.pendingQuote.destinationAsset,
+          amount: this.pendingQuote.amount,
+          recipientAddress: this.pendingQuote.recipientAddress,
+          refundAddress: opts.nearAccountId,
+          slippageTolerance: 100,
+        },
+        opts.nearAccountId,
+        opts.nearPrivateKey,
+      );
+
+      this.lastExecutionResult = result;
+
+      if (!result.success) {
+        this.pendingQuote = null;
+        return {
+          message: `❌ **Swap Failed**\n\n${result.error || 'Unknown error.'}\n\nPlease try again.`,
+          type: 'error',
+          suggestedActions: ['Try again', 'Help'],
+        };
+      }
+
+      const pendingData = { ...this.pendingQuote };
+      this.pendingQuote = null;
+      const q = result.quote?.quote;
+
+      return {
+        message: `✅ **Swap Executed Successfully!**
+
+| | Details |
+|---|---|
+| **From** | ${pendingData.amountIn} ${pendingData.tokenInSymbol} |
+| **To** | ${q?.amountOutFormatted || q?.amountOut || 'Pending...'} ${pendingData.tokenOutSymbol} |
+| **Your NEAR Account** | \`${opts.nearAccountId}\` |
+| **Deposit Address** | \`${result.depositAddress}\` |
+| **TX Hash** | \`${result.txHash}\` |
+
+📊 Track progress: say **"status ${result.depositAddress}"**
+🔗 [NEAR Intents Explorer](${result.explorerUrl})`,
+        type: 'execution',
+        data: {
+          depositAddress: result.depositAddress,
+          txHash: result.txHash,
+          quote: q,
+          explorerUrl: result.explorerUrl,
+          nearBlocksUrl: result.nearBlocksUrl,
+          ...pendingData,
+        },
+        suggestedActions: [
+          `Check status of ${result.depositAddress}`,
+          'Get another quote',
+        ],
+      };
+    } catch (error) {
+      this.pendingQuote = null;
+      return {
+        message: `❌ **Swap Failed**\n\n${error instanceof Error ? error.message : 'Unknown error'}\n\nCheck that your imported NEAR credentials are correct.`,
+        type: 'error',
+        suggestedActions: ['Try again', 'Help'],
+      };
+    }
+  }
+
+  /**
+   * Return deposit info so the client can sign the deposit with their connected NEAR wallet.
+   * Used when executionMode === 'client-sign' (website with wallet selector).
+   */
+  private async handleClientSideDeposit(opts: ProcessMessageOptions): Promise<AgentResponse> {
     if (!this.pendingQuote) {
       return { message: 'No pending quote.', type: 'error' };
     }
 
-    if (!userAddress) {
-      // Even without wallet, if we have NEAR account we can use it for refund
+    try {
+      // Get a live quote with deposit address
+      const quote = await this.api.getLiveQuote({
+        originAsset: this.pendingQuote.originAsset,
+        destinationAsset: this.pendingQuote.destinationAsset,
+        amount: this.pendingQuote.amount,
+        refundAddress: opts.nearAccountId || this.pendingQuote.refundAddress,
+        recipientAddress: this.pendingQuote.recipientAddress,
+      });
+
+      if (quote.error || !quote.quote?.depositAddress) {
+        return {
+          message: `Failed to prepare deposit: ${quote.error || 'No deposit address returned'}. Please try again.`,
+          type: 'error',
+          suggestedActions: ['Try again', 'Get a new quote'],
+        };
+      }
+
+      const q = quote.quote;
+      const pendingData = { ...this.pendingQuote };
+      this.pendingQuote = null;
+
+      return {
+        message: `🔐 **Sign & Send Deposit**
+
+Your NEAR wallet will be prompted to sign a transfer of **${pendingData.amountIn} ${pendingData.tokenInSymbol}** to the deposit address.
+
+| | Details |
+|---|---|
+| **From** | ${pendingData.amountIn} ${pendingData.tokenInSymbol} |
+| **To** | ${q.amountOutFormatted || q.amountOut} ${pendingData.tokenOutSymbol} |
+| **Deposit Address** | \`${q.depositAddress}\` |
+| **Your NEAR Account** | \`${opts.nearAccountId}\` |
+
+⏳ Please approve the transaction in your wallet...`,
+        type: 'deposit_needed',
+        data: {
+          ...pendingData,
+          depositAddress: q.depositAddress,
+          amountFormatted: pendingData.amountIn,
+          tokenSymbol: pendingData.tokenInSymbol,
+          deadline: q.deadline,
+          quote: q,
+        },
+        suggestedActions: [],
+      };
+    } catch (error) {
+      return {
+        message: `Failed to prepare deposit: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        type: 'error',
+        suggestedActions: ['Try again'],
+      };
+    }
+  }
+
+  /**
+   * Handle a deposit_sent confirmation after client-side signing.
+   * The client sends "deposit_sent <txHash> <depositAddress>" after signing.
+   */
+  private async handleDepositSent(txHash: string, depositAddress: string): Promise<AgentResponse> {
+    try {
+      // Submit the tx hash to 1-Click API
+      const api = getNearIntentsAPI();
+      try {
+        await api.submitDepositTx({ txHash, depositAddress });
+      } catch {
+        // Non-critical
+        console.warn('[Agent] Failed to submit tx hash to 1-Click API');
+      }
+
+      return {
+        message: `✅ **Deposit Submitted!**
+
+| | Details |
+|---|---|
+| **TX Hash** | \`${txHash}\` |
+| **Deposit Address** | \`${depositAddress}\` |
+| **Status** | 🔄 Processing |
+
+Your swap is being processed! Say **"status ${depositAddress}"** to track progress.
+
+🔗 [NEAR Intents Explorer](https://explorer.near-intents.org/transactions/${depositAddress})
+🔗 [NearBlocks TX](https://nearblocks.io/txns/${txHash})`,
+        type: 'execution',
+        data: { txHash, depositAddress },
+        suggestedActions: [
+          `Check status of ${depositAddress}`,
+          'Get another quote',
+        ],
+      };
+    } catch (error) {
+      return {
+        message: `Failed to submit deposit: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        type: 'error',
+        suggestedActions: ['Try again'],
+      };
+    }
+  }
+
+  /**
+   * Show deposit address for manual deposit (non-NEAR origins or no auto-execution).
+   */
+  private async handleManualDeposit(opts: ProcessMessageOptions): Promise<AgentResponse> {
+    if (!this.pendingQuote) {
+      return { message: 'No pending quote.', type: 'error' };
+    }
+
+    const userAddress = opts.userAddress;
+
+    if (!userAddress && !opts.nearAccountId) {
       if (!isNearAccountConfigured()) {
         return {
-          message: '⚠️ Please connect your wallet or configure a NEAR account to execute swaps.',
+          message: '⚠️ Please connect your wallet or enter your NEAR account ID to execute swaps.',
           type: 'error',
           suggestedActions: ['Help'],
         };
@@ -1061,29 +1319,35 @@ ${status.status === 'FAILED' ? '❌ The swap failed. Please try again with a new
     }
   }
 
-  private handleBalance(userAddress?: string): AgentResponse {
+  private handleBalance(opts: ProcessMessageOptions): AgentResponse {
     const nearConfigured = isNearAccountConfigured();
     const nearAccountId = getNearAccountId();
+    const userAddress = opts.userAddress;
+    const userNear = opts.nearAccountId;
 
     let message = '';
 
-    if (nearConfigured) {
-      message += `**NEAR Account:** \`${nearAccountId}\` (configured for auto-execution)\n\n`;
+    if (userNear) {
+      message += `**Your NEAR Account:** \`${userNear}\`\n\n`;
+    } else if (nearConfigured) {
+      message += `**Server NEAR Account:** \`${nearAccountId}\` (auto-execution)\n\n`;
     }
 
     if (userAddress) {
       message += `**Connected Wallet:** \`${userAddress}\`\n\n`;
     }
 
-    if (!nearConfigured && !userAddress) {
+    if (!nearConfigured && !userAddress && !userNear) {
       return {
-        message: '⚠️ No NEAR account configured and no wallet connected. Configure SENDER_NEAR_ACCOUNT in .env.local or connect a wallet.',
+        message: '⚠️ No NEAR account and no wallet connected. Enter your NEAR account ID or connect a wallet to get started.',
         type: 'text',
         suggestedActions: ['Help'],
       };
     }
 
-    message += 'I can execute swaps from the NEAR account. Try "swap 0.01 NEAR for SUI" to get started!';
+    message += userNear
+      ? `I can execute swaps using your NEAR account \`${userNear}\`. Try "swap 0.01 NEAR for SUI"!`
+      : 'I can execute swaps from the NEAR account. Try "swap 0.01 NEAR for SUI" to get started!';
 
     return {
       message,

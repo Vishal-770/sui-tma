@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import { useAuth } from '@/contexts/AuthContext';
+import { useNearWallet } from '@/contexts/NearWalletContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -18,7 +19,8 @@ import {
   Check,
   ExternalLink,
   Sparkles,
-  RefreshCw,
+  Wallet,
+  LogOut,
 } from 'lucide-react';
 import Link from 'next/link';
 import type { AgentResponse, MessageType } from '@/lib/near-intents-agent';
@@ -60,10 +62,23 @@ export default function AgentPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Wallet connection
+  // NEAR wallet via @hot-labs/near-connect
+  const {
+    accountId: nearAccountId,
+    isConnected: nearConnected,
+    isLoading: nearLoading,
+    connect: connectNear,
+    disconnect: disconnectNear,
+    signAndSendTransaction,
+  } = useNearWallet();
+
+  // SUI wallet connection
   const dappKitAccount = useCurrentAccount();
   const { isAuthenticated, session } = useAuth();
   const activeAddress = dappKitAccount?.address || session?.zkLoginAddress;
+
+  // When wallet is connected, use 'client-sign' so the agent returns deposit info for us to sign
+  const executionMode = nearConnected ? 'client-sign' : undefined;
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -85,7 +100,8 @@ I'm your cross-chain swap assistant, specializing in the **SUI ecosystem**. I us
 • "Show tokens on SUI"
 • "What chains are supported?"
 
-${activeAddress ? `✅ Wallet connected: \`${activeAddress.slice(0, 8)}...${activeAddress.slice(-6)}\`` : '⚠️ Connect your wallet to execute swaps.'}`,
+${activeAddress ? `✅ SUI Wallet: \`${activeAddress.slice(0, 8)}...${activeAddress.slice(-6)}\`` : '⚠️ Connect your SUI wallet to receive swapped tokens.'}
+${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : '💡 **Tip:** Click the **Connect NEAR** button to link your NEAR wallet for cross-chain swaps.'}`,
         type: 'help',
         timestamp: Date.now(),
         suggestedActions: [
@@ -105,6 +121,142 @@ ${activeAddress ? `✅ Wallet connected: \`${activeAddress.slice(0, 8)}...${acti
     setCopiedText(text);
     setTimeout(() => setCopiedText(null), 2000);
   }, []);
+
+  /**
+   * Submit the tx hash to the server after wallet signing.
+   */
+  const submitTxHash = useCallback(async (txHash: string, depositAddress: string) => {
+    try {
+      const res = await fetch('/api/agent/deposit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash, depositAddress }),
+      });
+      const data = await res.json();
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `txok-${Date.now()}`,
+          role: 'agent',
+          content: `✅ **Deposit Sent!**\n\nTransaction: \`${txHash}\`\n\n🔄 Your swap is now being processed. It typically takes 1-5 minutes.\n\n[View on NEAR Explorer](https://nearblocks.io/txns/${txHash}) · [Track Swap](${data.explorerUrl || '#'})`,
+          type: 'execution',
+          timestamp: Date.now(),
+          suggestedActions: [`status ${depositAddress}`],
+        },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `txsubmiterr-${Date.now()}`,
+          role: 'agent',
+          content: `✅ Transaction sent: \`${txHash}\`\n\n⚠️ Could not notify the relay, but your swap should still process. Track it on [NEAR Explorer](https://nearblocks.io/txns/${txHash}).`,
+          type: 'execution',
+          timestamp: Date.now(),
+          suggestedActions: [`status ${depositAddress}`],
+        },
+      ]);
+    }
+  }, []);
+
+  /**
+   * Use the connected NEAR wallet to sign the deposit transaction.
+   * After signing, submit the tx hash to the server.
+   */
+  const handleWalletDeposit = useCallback(
+    async (depositData: AgentData) => {
+      const { depositAddress, originAsset, amount } = depositData;
+      if (!depositAddress || !signAndSendTransaction) return;
+
+      // Add a "signing" message
+      const signingMsg: ChatMessage = {
+        id: `signing-${Date.now()}`,
+        role: 'agent',
+        content: '⏳ Requesting signature from your NEAR wallet...',
+        type: 'text',
+        timestamp: Date.now(),
+      };
+      setMessages((prev) => [...prev, signingMsg]);
+
+      try {
+        // Build the transaction actions based on the origin asset type
+        const assetId = String(originAsset || '');
+        const rawAmount = String(amount || '0');
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let actions: any[];
+
+        if (assetId === 'native:near' || assetId === 'nep141:wrap.near') {
+          // Native NEAR → simple transfer
+          actions = [
+            {
+              type: 'Transfer',
+              params: { deposit: rawAmount },
+            },
+          ];
+        } else if (assetId.startsWith('nep141:')) {
+          // NEP-141 token → ft_transfer_call on the token contract
+          const tokenContract = assetId.replace('nep141:', '');
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const result: any = await signAndSendTransaction({
+            receiverId: tokenContract,
+            actions: [
+              {
+                type: 'FunctionCall',
+                params: {
+                  methodName: 'ft_transfer_call',
+                  args: {
+                    receiver_id: String(depositAddress),
+                    amount: rawAmount,
+                    msg: '',
+                  },
+                  gas: '100000000000000', // 100 TGas
+                  deposit: '1',           // 1 yoctoNEAR
+                },
+              },
+            ],
+          });
+
+          const txHash = result?.transaction?.hash || result?.transaction_outcome?.id || '';
+          await submitTxHash(txHash, String(depositAddress));
+          return;
+        } else {
+          // Unknown asset type — fallback to transfer
+          actions = [
+            {
+              type: 'Transfer',
+              params: { deposit: rawAmount },
+            },
+          ];
+        }
+
+        // Execute the transaction
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result: any = await signAndSendTransaction({
+          receiverId: String(depositAddress),
+          actions,
+        });
+
+        const txHash = result?.transaction?.hash || result?.transaction_outcome?.id || '';
+        await submitTxHash(txHash, String(depositAddress));
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `txerr-${Date.now()}`,
+            role: 'agent',
+            content: `❌ **Transaction Failed**\n\n${errMsg}\n\nYou can try again or manually deposit using the address above.`,
+            type: 'error',
+            timestamp: Date.now(),
+            suggestedActions: ['Try again', 'Help'],
+          },
+        ]);
+      }
+    },
+    [signAndSendTransaction, submitTxHash],
+  );
 
   // Send message to agent
   const sendMessage = useCallback(
@@ -130,6 +282,8 @@ ${activeAddress ? `✅ Wallet connected: \`${activeAddress.slice(0, 8)}...${acti
           body: JSON.stringify({
             message: text.trim(),
             userAddress: activeAddress,
+            nearAccountId: nearAccountId || undefined,
+            executionMode,
             sessionId: getSessionId(),
           }),
         });
@@ -147,7 +301,16 @@ ${activeAddress ? `✅ Wallet connected: \`${activeAddress.slice(0, 8)}...${acti
         };
 
         setMessages((prev) => [...prev, agentMessage]);
-      } catch (error) {
+
+        // ── Auto-sign deposit with connected NEAR wallet ──
+        if (
+          data.type === 'deposit_needed' &&
+          data.data?.depositAddress &&
+          nearConnected
+        ) {
+          await handleWalletDeposit(data.data);
+        }
+      } catch {
         const errorMessage: ChatMessage = {
           id: `error-${Date.now()}`,
           role: 'agent',
@@ -162,7 +325,7 @@ ${activeAddress ? `✅ Wallet connected: \`${activeAddress.slice(0, 8)}...${acti
         inputRef.current?.focus();
       }
     },
-    [activeAddress, isLoading]
+    [activeAddress, nearAccountId, nearConnected, executionMode, isLoading, handleWalletDeposit]
   );
 
   // Handle suggested action click
@@ -206,13 +369,50 @@ ${activeAddress ? `✅ Wallet connected: \`${activeAddress.slice(0, 8)}...${acti
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          {/* NEAR Wallet — via @hot-labs/near-connect */}
+          {nearConnected && nearAccountId ? (
+            <div className="flex items-center gap-1.5">
+              <Badge variant="outline" className="text-xs font-mono gap-1">
+                <Wallet className="w-3 h-3 text-green-500" />
+                {nearAccountId.length > 16
+                  ? `${nearAccountId.slice(0, 8)}...`
+                  : nearAccountId}
+              </Badge>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={disconnectNear}
+                title="Disconnect NEAR wallet"
+              >
+                <LogOut className="w-3 h-3" />
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7 gap-1"
+              onClick={connectNear}
+              disabled={nearLoading}
+            >
+              {nearLoading ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Wallet className="w-3 h-3" />
+              )}
+              Connect NEAR
+            </Button>
+          )}
+
+          {/* SUI Wallet */}
           {activeAddress ? (
             <Badge variant="outline" className="text-xs font-mono">
               {activeAddress.slice(0, 6)}...{activeAddress.slice(-4)}
             </Badge>
           ) : (
             <Badge variant="secondary" className="text-xs">
-              No wallet
+              No SUI wallet
             </Badge>
           )}
         </div>
@@ -335,9 +535,9 @@ function MessageBubble({
           />
         </div>
 
-        {/* Deposit address copy button (for live quotes) */}
-        {message.type === 'live_quote' && message.data?.depositAddress && (
-          <div className="flex items-center gap-2 px-1">
+        {/* Deposit address copy button (for live quotes and deposit_needed) */}
+        {(message.type === 'live_quote' || message.type === 'deposit_needed') && message.data?.depositAddress && (
+          <div className="flex flex-wrap items-center gap-2 px-1">
             <Button
               variant="outline"
               size="sm"

@@ -75,6 +75,18 @@ export function getNearAccount(): Account {
 }
 
 /**
+ * Create a NEAR account instance from custom credentials (per-user import).
+ * NOT cached — each call creates a fresh instance.
+ */
+export function getNearAccountWithCredentials(accountId: string, privateKey: string): Account {
+  const signer = KeyPairSigner.fromSecretKey(privateKey as KeyPairString);
+  const provider = new JsonRpcProvider({
+    url: 'https://rpc.mainnet.fastnear.com',
+  });
+  return new Account(accountId, provider as Provider, signer);
+}
+
+/**
  * Check if NEAR account is configured.
  */
 export function isNearAccountConfigured(): boolean {
@@ -268,6 +280,98 @@ export async function executeSwap(config: SwapConfig): Promise<SwapExecutionResu
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error during swap execution',
+    };
+  }
+}
+
+/**
+ * Execute a complete swap using user-provided NEAR credentials.
+ * Same as executeSwap but uses custom account instead of env vars.
+ */
+export async function executeSwapWithCredentials(
+  config: SwapConfig,
+  accountId: string,
+  privateKey: string,
+): Promise<SwapExecutionResult> {
+  const api = getNearIntentsAPI();
+
+  console.log(`[SWAP] Starting swap with custom credentials for ${accountId}`);
+
+  try {
+    // Step 1: Get live quote
+    const refundAddr = config.refundAddress || accountId;
+    const quote = await api.getLiveQuote({
+      originAsset: config.originAsset,
+      destinationAsset: config.destinationAsset,
+      amount: config.amount,
+      refundAddress: refundAddr,
+      recipientAddress: config.recipientAddress,
+      slippageTolerance: config.slippageTolerance,
+    });
+
+    if (quote.error || !quote.quote?.depositAddress) {
+      return {
+        success: false,
+        error: `Quote failed: ${quote.error || 'No deposit address'}`,
+        quote,
+      };
+    }
+
+    const depositAddress = quote.quote.depositAddress;
+    console.log(`[SWAP] Got deposit address: ${depositAddress}`);
+
+    // Step 2: Send deposit using custom account
+    const customAccount = getNearAccountWithCredentials(accountId, privateKey);
+    const isNativeNear =
+      config.originAsset === 'nep141:wrap.near' ||
+      config.originAsset === 'near' ||
+      config.originAsset.includes('wrap.near');
+
+    let txHash: string;
+    if (isNativeNear) {
+      const result = await customAccount.transfer({
+        token: NEAR,
+        amount: config.amount,
+        receiverId: depositAddress,
+      });
+      txHash = result.transaction.hash;
+    } else {
+      const contractMatch = config.originAsset.match(/^nep141:(.+)$/);
+      if (!contractMatch) {
+        throw new Error(`Unsupported asset format: ${config.originAsset}`);
+      }
+      const result = await customAccount.callFunctionRaw({
+        contractId: contractMatch[1],
+        methodName: 'ft_transfer_call',
+        args: { receiver_id: depositAddress, amount: config.amount, msg: '' },
+        gas: BigInt(300_000_000_000_000),
+        deposit: BigInt(1),
+      });
+      txHash = result.transaction.hash;
+    }
+
+    console.log(`[SWAP] Custom account deposit sent! TX: ${txHash}`);
+
+    // Step 3: Submit tx hash
+    try {
+      await api.submitDepositTx({ txHash, depositAddress });
+    } catch {
+      console.warn('[SWAP] Warning: Failed to submit tx hash');
+    }
+
+    return {
+      success: true,
+      depositAddress,
+      txHash,
+      quote,
+      explorerUrl: `https://explorer.near-intents.org/transactions/${depositAddress}`,
+      nearBlocksUrl: `https://nearblocks.io/txns/${txHash}`,
+    };
+  } catch (error) {
+    console.error('[SWAP] Custom credentials execution failed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
 }

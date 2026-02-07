@@ -24,12 +24,20 @@ interface SessionData {
   walletAddress?: string;
 }
 
+/** Per-user NEAR credentials for auto-execution */
+interface NearUserCredentials {
+  accountId: string;
+  privateKey: string;
+}
+
 type BotContext = Context & SessionFlavor<SessionData>;
 
-// ============== Agent Pool ==============
+// ============== Agent Pool & Credentials ==============
 
 /** One NearIntentsAgent per chat to maintain swap state (pending quotes, etc.) */
 const agents = new Map<string, NearIntentsAgent>();
+/** Per-user NEAR credentials (in-memory, cleared on restart) */
+const nearCredentials = new Map<string, NearUserCredentials>();
 const AGENT_POOL_MAX = 500;
 
 function getOrCreateAgent(chatId: string): NearIntentsAgent {
@@ -45,6 +53,17 @@ function getOrCreateAgent(chatId: string): NearIntentsAgent {
     }
   }
   return agent;
+}
+
+/** Build agent options from per-user state */
+function getAgentOptions(chatId: string, walletAddress?: string) {
+  const creds = nearCredentials.get(chatId);
+  return {
+    userAddress: walletAddress,
+    nearAccountId: creds?.accountId,
+    nearPrivateKey: creds?.privateKey,
+    executionMode: (creds?.privateKey ? 'auto' : 'manual') as 'auto' | 'manual',
+  };
 }
 
 // ============== Formatting ==============
@@ -116,9 +135,17 @@ export function createTradingBot(token: string): Bot<BotContext> {
   // ─── /start ─────────────────────────────────────────
 
   bot.command("start", async (ctx) => {
+    const chatId = ctx.chat.id.toString();
+    const userCreds = nearCredentials.get(chatId);
     const walletLinked = ctx.session.walletAddress
       ? `✅ Wallet: \`${ctx.session.walletAddress.slice(0, 10)}...${ctx.session.walletAddress.slice(-6)}\``
       : "⚠️ No wallet linked — use /wallet <address>";
+
+    const nearStatus = userCreds
+      ? `✅ Your NEAR Account: \`${userCreds.accountId}\` (auto-execution)`
+      : nearOk
+        ? `ℹ️ Server NEAR Account: \`${nearAccount}\``
+        : "❌ No NEAR account — use /import to add yours";
 
     await ctx.reply(
       `🚀 *Welcome to NEAR Intents Swap Bot!*\n\n` +
@@ -132,9 +159,11 @@ export function createTradingBot(token: string): Bot<BotContext> {
         `/tokens — Supported tokens\n` +
         `/status — Check swap status\n` +
         `/wallet — Link your wallet\n` +
+        `/import — Import NEAR account for auto-execution\n` +
+        `/delete — Remove imported NEAR account\n` +
         `/help — Full guide\n\n` +
         `*Setup:*\n` +
-        `${nearOk ? `✅ NEAR Account: \`${nearAccount}\`` : "❌ NEAR account not configured"}\n` +
+        `${nearStatus}\n` +
         `${walletLinked}`,
       {
         parse_mode: "Markdown",
@@ -152,7 +181,13 @@ export function createTradingBot(token: string): Bot<BotContext> {
   bot.command("help", async (ctx) => {
     const chatId = ctx.chat.id.toString();
     const agent = getOrCreateAgent(chatId);
-    const response = await agent.processMessage("help", ctx.session.walletAddress);
+    const creds = nearCredentials.get(chatId);
+    const response = await agent.processMessage("help", {
+      userAddress: ctx.session.walletAddress,
+      nearAccountId: creds?.accountId,
+      nearPrivateKey: creds?.privateKey,
+      executionMode: creds?.privateKey ? 'auto' : 'manual',
+    });
     await ctx.reply(formatForTelegram(response), {
       parse_mode: "Markdown",
       reply_markup: buildKeyboard(response.suggestedActions),
@@ -169,7 +204,7 @@ export function createTradingBot(token: string): Bot<BotContext> {
     await ctx.api.sendChatAction(chatId, "typing");
 
     const query = chain ? `tokens on ${chain}` : "tokens";
-    const response = await agent.processMessage(query, ctx.session.walletAddress);
+    const response = await agent.processMessage(query, getAgentOptions(chatId, ctx.session.walletAddress));
     let text = formatForTelegram(response);
 
     // Telegram messages max 4096 chars
@@ -214,7 +249,7 @@ export function createTradingBot(token: string): Bot<BotContext> {
 
     const response = await agent.processMessage(
       `swap ${args}`,
-      ctx.session.walletAddress,
+      getAgentOptions(chatId, ctx.session.walletAddress),
     );
 
     await ctx.reply(formatForTelegram(response), {
@@ -242,7 +277,7 @@ export function createTradingBot(token: string): Bot<BotContext> {
 
     const response = await agent.processMessage(
       `status ${depositAddress}`,
-      ctx.session.walletAddress,
+      getAgentOptions(chatId, ctx.session.walletAddress),
     );
 
     await ctx.reply(formatForTelegram(response), {
@@ -314,6 +349,102 @@ export function createTradingBot(token: string): Bot<BotContext> {
     );
   });
 
+  // ─── /import <accountId> <privateKey> ─────────────
+
+  bot.command("import", async (ctx) => {
+    const args = ctx.match?.trim();
+    const chatId = ctx.chat.id.toString();
+
+    if (!args) {
+      const existing = nearCredentials.get(chatId);
+      if (existing) {
+        await ctx.reply(
+          `🔑 *Your NEAR Account*\n\n` +
+            `Account: \`${existing.accountId}\`\n` +
+            `Status: ✅ Imported (auto-execution enabled)\n\n` +
+            `Use /delete to remove your credentials.`,
+          { parse_mode: "Markdown" },
+        );
+      } else {
+        await ctx.reply(
+          `🔑 *Import NEAR Account*\n\n` +
+            `Import your NEAR account for auto-execution:\n` +
+            `/import yourname.near ed25519:YourPrivateKey\n\n` +
+            `⚠️ Your private key is stored in memory only and cleared when the bot restarts.\n` +
+            `Only import keys for accounts you control.`,
+          { parse_mode: "Markdown" },
+        );
+      }
+      return;
+    }
+
+    const parts = args.split(/\s+/);
+    if (parts.length < 2) {
+      await ctx.reply(
+        "⚠️ Usage: /import <account\\_id> <private\\_key>\n\n" +
+          "Example: /import myaccount.near ed25519:ABC123...",
+        { parse_mode: "Markdown" },
+      );
+      return;
+    }
+
+    const accountId = parts[0];
+    const privateKey = parts.slice(1).join(' ');
+
+    // Basic validation
+    if (!accountId.includes('.') && accountId.length !== 64) {
+      await ctx.reply("⚠️ Invalid NEAR account ID. Expected format: yourname.near or a 64-char implicit account.");
+      return;
+    }
+
+    if (!privateKey.startsWith('ed25519:')) {
+      await ctx.reply("⚠️ Private key should start with `ed25519:`. Please check your key format.", { parse_mode: "Markdown" });
+      return;
+    }
+
+    // Store credentials
+    nearCredentials.set(chatId, { accountId, privateKey });
+
+    // Delete the user's message containing the private key for security
+    try {
+      await ctx.api.deleteMessage(ctx.chat.id, ctx.message!.message_id);
+    } catch {
+      // May fail if bot doesn't have delete permission
+    }
+
+    await ctx.reply(
+      `✅ *NEAR Account Imported!*\n\n` +
+        `Account: \`${accountId}\`\n` +
+        `Auto-execution: *enabled*\n\n` +
+        `Your swaps from NEAR will now execute automatically.\n` +
+        `🔒 Your key is stored in memory only — it's cleared when the bot restarts.\n\n` +
+        `Try: "swap 0.01 NEAR for SUI"`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: buildKeyboard(["Swap 0.01 NEAR for SUI", "Show tokens"]),
+      },
+    );
+  });
+
+  // ─── /delete — Remove imported credentials ────────
+
+  bot.command("delete", async (ctx) => {
+    const chatId = ctx.chat.id.toString();
+    const had = nearCredentials.has(chatId);
+    nearCredentials.delete(chatId);
+
+    if (had) {
+      await ctx.reply(
+        "🗑️ *NEAR credentials removed.*\n\nYour account has been disconnected. Swaps will now show deposit addresses for manual sending.",
+        { parse_mode: "Markdown" },
+      );
+    } else {
+      await ctx.reply(
+        "ℹ️ No NEAR credentials to remove. Use /import to add your NEAR account.",
+      );
+    }
+  });
+
   // ─── Callback queries (inline button presses) ─────
 
   bot.on("callback_query:data", async (ctx) => {
@@ -328,7 +459,7 @@ export function createTradingBot(token: string): Bot<BotContext> {
 
     const response = await agent.processMessage(
       actionText,
-      ctx.session.walletAddress,
+      getAgentOptions(chatId, ctx.session.walletAddress),
     );
 
     let text = formatForTelegram(response);
@@ -359,7 +490,7 @@ export function createTradingBot(token: string): Bot<BotContext> {
 
     const response = await agent.processMessage(
       message,
-      ctx.session.walletAddress,
+      getAgentOptions(chatId, ctx.session.walletAddress),
     );
 
     let text = formatForTelegram(response);
@@ -394,6 +525,7 @@ async function main() {
 
   console.log("🤖 Starting NEAR Intents Swap Bot...");
   console.log(`   NEAR Account: ${isNearAccountConfigured() ? getNearAccountId() : "NOT CONFIGURED"}`);
+  console.log("   Dynamic wallets: /import to add per-user NEAR accounts");
 
   const bot = createTradingBot(token);
 

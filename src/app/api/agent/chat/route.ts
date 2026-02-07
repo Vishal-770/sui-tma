@@ -2,8 +2,8 @@
  * POST /api/agent/chat
  * 
  * Main chat endpoint for the NEAR Intents AI Agent.
- * Accepts a user message and optional wallet address,
- * returns the agent's response.
+ * Accepts a user message, optional wallet addresses, and execution mode.
+ * Returns the agent's response.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -31,9 +31,19 @@ function getOrCreateAgent(sessionId: string): NearIntentsAgent {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { message, userAddress, sessionId } = body as {
+    const {
+      message,
+      userAddress,
+      nearAccountId,
+      nearPrivateKey,
+      executionMode,
+      sessionId,
+    } = body as {
       message: string;
       userAddress?: string;
+      nearAccountId?: string;
+      nearPrivateKey?: string;
+      executionMode?: 'auto' | 'client-sign' | 'manual';
       sessionId: string;
     };
 
@@ -52,7 +62,12 @@ export async function POST(request: NextRequest) {
     }
 
     const agent = getOrCreateAgent(sessionId);
-    const response = await agent.processMessage(message.trim(), userAddress);
+    const response = await agent.processMessage(message.trim(), {
+      userAddress,
+      nearAccountId,
+      nearPrivateKey,
+      executionMode,
+    });
 
     return NextResponse.json(response);
   } catch (error) {
