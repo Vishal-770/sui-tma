@@ -4,8 +4,13 @@
  * Handles incoming Telegram updates via webhook (serverless).
  * Uses NearIntentsAgent to parse natural language and execute cross-chain swaps.
  *
+ * Wallet connection methods:
+ *   /connect   — Secure wallet link (Mini App or Web Link, no private keys)
+ *   /import    — Legacy private key import (not recommended)
+ *   /disconnect — Unlink NEAR account
+ *
  * Setup:
- *   1. Set TELEGRAM_BOT_TOKEN in .env.local
+ *   1. Set TELEGRAM_BOT_TOKEN and NEXT_PUBLIC_APP_URL in .env
  *   2. Deploy your app (e.g. to Vercel)
  *   3. Register webhook:
  *      curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
@@ -14,53 +19,27 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { NearIntentsAgent, type AgentResponse } from "@/lib/near-intents-agent";
+import { type AgentResponse } from "@/lib/near-intents-agent";
 import {
   isNearAccountConfigured,
   getNearAccountId,
 } from "@/lib/near-transactions";
+import {
+  getOrCreateAgent,
+  wallets,
+  nearAccounts,
+  nearLegacyCreds,
+  getAgentOpts,
+  createLinkSignature,
+} from "@/lib/telegram-store";
 
 // ============== Config ==============
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BOT_ENABLED = Boolean(TELEGRAM_TOKEN);
-
-// ============== Agent Pool & Credentials ==============
-
-const agents = new Map<string, NearIntentsAgent>();
-const wallets = new Map<string, string>(); // chatId → wallet address
-/** Per-user NEAR credentials (in-memory, cleared on redeploy) */
-const nearCreds = new Map<string, { accountId: string; privateKey: string }>();
-const AGENT_POOL_MAX = 500;
-
-function getOrCreateAgent(chatId: string): NearIntentsAgent {
-  let agent = agents.get(chatId);
-  if (!agent) {
-    agent = new NearIntentsAgent();
-    agents.set(chatId, agent);
-    if (agents.size > AGENT_POOL_MAX) {
-      const oldest = agents.keys().next().value;
-      if (oldest) {
-        agents.delete(oldest);
-        wallets.delete(oldest);
-        nearCreds.delete(oldest);
-      }
-    }
-  }
-  return agent;
-}
-
-/** Build agent options from per-user state */
-function getAgentOpts(chatId: string) {
-  const wallet = wallets.get(chatId);
-  const creds = nearCreds.get(chatId);
-  return {
-    userAddress: wallet,
-    nearAccountId: creds?.accountId,
-    nearPrivateKey: creds?.privateKey,
-    executionMode: (creds?.privateKey ? 'auto' : 'manual') as 'auto' | 'manual',
-  };
-}
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL ||
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
 
 // ============== Telegram API Helpers ==============
 
@@ -161,16 +140,19 @@ async function handleStart(chatId: number) {
   const nearOk = isNearAccountConfigured();
   const nearAccount = getNearAccountId();
   const wallet = wallets.get(chatId.toString());
-  const creds = nearCreds.get(chatId.toString());
+  const linked = nearAccounts.get(chatId.toString());
+  const legacy = nearLegacyCreds.get(chatId.toString());
   const walletLine = wallet
     ? `✅ Wallet: \`${wallet.slice(0, 10)}...${wallet.slice(-6)}\``
     : "⚠️ No wallet linked — use /wallet <address>";
 
-  const nearStatus = creds
-    ? `✅ Your NEAR Account: \`${creds.accountId}\` (auto-execution)`
-    : nearOk
-      ? `ℹ️ Server NEAR Account: \`${nearAccount}\``
-      : "❌ No NEAR account — use /import to add yours";
+  const nearStatus = linked
+    ? `✅ NEAR Wallet: \`${linked}\` (connected securely)`
+    : legacy
+      ? `✅ NEAR Account: \`${legacy.accountId}\` (imported — consider /connect instead)`
+      : nearOk
+        ? `ℹ️ Server NEAR Account: \`${nearAccount}\``
+        : "❌ No NEAR account — use /connect to link yours";
 
   await sendMessage(
     chatId,
@@ -181,17 +163,17 @@ async function handleStart(chatId: number) {
       `• "swap 100 USDC for ETH"\n` +
       `• "quote 50 USDT to BTC"\n\n` +
       `*Commands:*\n` +
+      `/connect — 🔗 Connect NEAR wallet (secure)\n` +
+      `/disconnect — Unlink NEAR wallet\n` +
       `/swap — Start a swap\n` +
       `/tokens — Supported tokens\n` +
       `/status — Check swap status\n` +
-      `/wallet — Link your wallet\n` +
-      `/import — Import NEAR account\n` +
-      `/delete — Remove NEAR account\n` +
+      `/wallet — Link SUI/EVM receive address\n` +
       `/help — Full guide\n\n` +
       `*Setup:*\n` +
       `${nearStatus}\n` +
       `${walletLine}`,
-    { reply_markup: buildKeyboard(["Show tokens", "Help", "Swap 0.01 NEAR for SUI"]) },
+    { reply_markup: buildKeyboard(["Connect NEAR", "Show tokens", "Swap 0.01 NEAR for SUI"]) },
   );
 }
 
@@ -286,7 +268,25 @@ async function handleUpdate(update: Record<string, unknown>) {
 
     await answerCallbackQuery(queryId);
 
-    if (!data?.startsWith("agent:") || !chatId) return;
+    if (!chatId) return;
+
+    // Handle "Connect NEAR" button press → show /connect options
+    if (data === 'agent:Connect NEAR') {
+      await handleConnectCommand(chatId);
+      return;
+    }
+
+    // Handle "Disconnect" button press
+    if (data === 'agent:disconnect') {
+      nearAccounts.delete(chatId.toString());
+      nearLegacyCreds.delete(chatId.toString());
+      await sendMessage(chatId, "✅ NEAR wallet disconnected.", {
+        reply_markup: buildKeyboard(["Connect NEAR", "Help"]),
+      });
+      return;
+    }
+
+    if (!data?.startsWith("agent:")) return;
 
     const actionText = data.slice(6);
     const agent = getOrCreateAgent(chatId.toString());
@@ -302,25 +302,77 @@ async function handleUpdate(update: Record<string, unknown>) {
 
   // ─── Regular messages ──────────────────────────────
   const message = update.message as Record<string, unknown> | undefined;
-  if (!message?.text) return;
+  if (!message) return;
 
   const chat = message.chat as Record<string, unknown>;
   const chatId = chat.id as number;
+
+  // ── Handle web_app_data from Telegram Mini App ──
+  const webAppData = message.web_app_data as Record<string, unknown> | undefined;
+  if (webAppData?.data) {
+    try {
+      const payload = JSON.parse(webAppData.data as string);
+      if (payload.type === 'near_connect' && payload.accountId) {
+        nearAccounts.set(chatId.toString(), payload.accountId);
+        await sendMessage(
+          chatId,
+          `✅ *NEAR Wallet Connected!*\n\n` +
+            `Account: \`${payload.accountId}\`\n\n` +
+            `Your swaps will now use this account. No private keys were shared! 🔒\n\n` +
+            `Try: "swap 0.01 NEAR for SUI"\n` +
+            `Use /disconnect to unlink.`,
+          { reply_markup: buildKeyboard(["Swap 0.01 NEAR for SUI", "Show tokens"]) },
+        );
+      }
+    } catch {
+      console.error('[Telegram] Failed to parse web_app_data');
+    }
+    return;
+  }
+
+  // If no text, skip
+  if (!message.text) return;
   const text = (message.text as string).trim();
 
-  // ── Commands ──
+  // ── /start ──
+  if (text === "/start") {
+    await handleStart(chatId);
+    return;
+  }
 
-  if (text === "/start" || text === "/help") {
-    if (text === "/help") {
-      await sendChatAction(chatId);
-      const agent = getOrCreateAgent(chatId.toString());
-      const opts = getAgentOpts(chatId.toString());
-      const response = await agent.processMessage("help", opts);
-      await sendMessage(chatId, truncate(formatForTelegram(response)), {
-        reply_markup: buildKeyboard(response.suggestedActions),
-      });
+  // ── /help ──
+  if (text === "/help") {
+    await sendChatAction(chatId);
+    const agent = getOrCreateAgent(chatId.toString());
+    const opts = getAgentOpts(chatId.toString());
+    const response = await agent.processMessage("help", opts);
+    await sendMessage(chatId, truncate(formatForTelegram(response)), {
+      reply_markup: buildKeyboard(response.suggestedActions),
+    });
+    return;
+  }
+
+  // ── /connect — Secure NEAR wallet connection ──
+  if (text === "/connect") {
+    await handleConnectCommand(chatId);
+    return;
+  }
+
+  // ── /disconnect — Unlink NEAR wallet ──
+  if (text === "/disconnect" || text === "/delete") {
+    const hadLink = nearAccounts.has(chatId.toString());
+    const hadLegacy = nearLegacyCreds.has(chatId.toString());
+    nearAccounts.delete(chatId.toString());
+    nearLegacyCreds.delete(chatId.toString());
+
+    if (hadLink || hadLegacy) {
+      await sendMessage(
+        chatId,
+        "✅ *NEAR wallet disconnected.*\n\nYour account has been unlinked. Swaps will now show deposit addresses for manual sending.\n\nUse /connect to link a new wallet.",
+        { reply_markup: buildKeyboard(["Connect NEAR", "Help"]) },
+      );
     } else {
-      await handleStart(chatId);
+      await sendMessage(chatId, "ℹ️ No NEAR wallet linked. Use /connect to connect one.");
     }
     return;
   }
@@ -369,14 +421,28 @@ async function handleUpdate(update: Record<string, unknown>) {
     return;
   }
 
-  // /import <accountId> <privateKey>
+  // ── /import — Legacy private key import (multi-line safe) ──
   if (text.startsWith("/import")) {
-    const parts = text.replace(/^\/import\s*/, "").trim().split(/\s+/);
-    if (parts.length < 2) {
-      await sendMessage(chatId, "Usage: /import <nearAccountId> <privateKey>\n\nExample:\n/import alice.near ed25519:5abc...\n\n⚠️ Your message will be auto-deleted for safety.");
+    // Join all text after "/import" and split by whitespace (handles newlines)
+    const rawArgs = text.replace(/^\/import/, '').replace(/\s+/g, ' ').trim();
+    const parts = rawArgs.split(' ');
+
+    if (parts.length < 2 || !parts[0] || !parts[1]) {
+      await sendMessage(
+        chatId,
+        `⚠️ *Consider using /connect instead!*\n\n` +
+          `/connect lets you link your NEAR wallet securely — no private keys sent through Telegram.\n\n` +
+          `If you still want to import manually:\n` +
+          `Usage: /import <nearAccountId> <privateKey>\n\n` +
+          `Example:\n/import alice.near ed25519:5abc...`,
+      );
       return;
     }
-    const [accountId, privateKey] = parts;
+
+    const accountId = parts[0];
+    // The private key may have been split — rejoin everything after accountId
+    const privateKey = parts.slice(1).join('');
+
     // Auto-delete the user's message containing the private key
     try {
       await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
@@ -385,22 +451,34 @@ async function handleUpdate(update: Record<string, unknown>) {
         body: JSON.stringify({ chat_id: chatId, message_id: (message as Record<string, unknown>).message_id }),
       });
     } catch { /* best effort */ }
-    nearCreds.set(chatId.toString(), { accountId, privateKey });
-    await sendMessage(chatId, `✅ *NEAR Account Imported*\n\nAccount: \`${accountId}\`\nAuto-execution: enabled\n\n🔒 Credentials stored in memory only (cleared on server restart).\n⚠️ Your message was deleted for security.`, {
-      reply_markup: buildKeyboard(["Swap 0.01 NEAR for SUI", "Show tokens"]),
-    });
+
+    // Validate
+    if (!accountId.includes('.') && accountId.length !== 64) {
+      await sendMessage(chatId, "⚠️ Invalid NEAR account ID. Expected: yourname.near or 64-char implicit account.");
+      return;
+    }
+    if (!privateKey.startsWith('ed25519:')) {
+      await sendMessage(chatId, "⚠️ Private key should start with `ed25519:`. Please check your key format.");
+      return;
+    }
+
+    nearLegacyCreds.set(chatId.toString(), { accountId, privateKey });
+    nearAccounts.set(chatId.toString(), accountId);
+
+    await sendMessage(
+      chatId,
+      `✅ *NEAR Account Imported*\n\n` +
+        `Account: \`${accountId}\`\n` +
+        `Auto-execution: enabled\n\n` +
+        `🔒 Credentials in memory only (cleared on restart).\n` +
+        `⚠️ Your message was deleted for security.\n\n` +
+        `💡 *Tip:* Next time use /connect for a more secure method — no private keys needed!`,
+      { reply_markup: buildKeyboard(["Swap 0.01 NEAR for SUI", "Show tokens"]) },
+    );
     return;
   }
 
-  // /delete — remove imported NEAR credentials
-  if (text === "/delete") {
-    const had = nearCreds.has(chatId.toString());
-    nearCreds.delete(chatId.toString());
-    await sendMessage(chatId, had ? "✅ NEAR credentials removed." : "ℹ️ No imported credentials to remove.");
-    return;
-  }
-
-  // Skip other unrecognized commands
+  // Skip unrecognized commands
   if (text.startsWith("/")) {
     await sendMessage(
       chatId,
@@ -431,6 +509,60 @@ async function handleUpdate(update: Record<string, unknown>) {
   });
 }
 
+// ============== /connect Command =============================
+
+async function handleConnectCommand(chatId: number) {
+  const sig = createLinkSignature(chatId.toString());
+  const webLinkUrl = `${APP_URL}/telegram/link-wallet?chatId=${chatId}&sig=${sig}`;
+  const miniAppUrl = `${APP_URL}/telegram/connect-wallet`;
+
+  // Check if already connected
+  const existing = nearAccounts.get(chatId.toString());
+  const statusLine = existing
+    ? `\n✅ Currently connected: \`${existing}\`\n`
+    : '';
+
+  await sendMessage(
+    chatId,
+    `🔗 *Connect NEAR Wallet*${statusLine}\n\n` +
+      `Choose how to connect:\n\n` +
+      `*Option 1 — Mini App (Recommended)*\n` +
+      `Tap the button below to open the wallet connector right here in Telegram.\n\n` +
+      `*Option 2 — Web Link*\n` +
+      `Open this link in your browser to connect:\n` +
+      `[Connect via Browser](${webLinkUrl})\n\n` +
+      `🔒 *Both methods are secure* — your private keys never leave your wallet. Only your account ID (e.g. \`alice.near\`) is shared with the bot.`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: '🔗 Open Wallet Connector',
+              web_app: { url: miniAppUrl },
+            },
+          ],
+          [
+            {
+              text: '🌐 Open in Browser',
+              url: webLinkUrl,
+            },
+          ],
+          ...(existing
+            ? [
+                [
+                  {
+                    text: '❌ Disconnect Current',
+                    callback_data: 'agent:disconnect',
+                  },
+                ],
+              ]
+            : []),
+        ],
+      },
+    },
+  );
+}
+
 // ============== Route Handlers ==============
 
 export async function POST(req: NextRequest) {
@@ -452,14 +584,17 @@ export async function GET() {
   return NextResponse.json({
     ok: true,
     bot: "NEAR Intents Swap Bot",
-    version: "3.0.0",
+    version: "4.0.0",
     enabled: BOT_ENABLED,
     nearAccount: isNearAccountConfigured() ? getNearAccountId() : null,
     features: [
       "cross-chain-swaps",
       "natural-language",
       "near-intents-1click",
-      "auto-execution",
+      "secure-wallet-connect",
+      "telegram-mini-app",
+      "web-link-auth",
+      "legacy-import",
     ],
   });
 }

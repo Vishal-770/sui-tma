@@ -5,17 +5,28 @@
  * using the NEAR Intents 1-Click API. Powered by NearIntentsAgent.
  *
  * Commands:
- *   /start  — Welcome & setup info
- *   /help   — Available commands & examples
- *   /swap   — Start a cross-chain swap
- *   /tokens — List supported tokens
- *   /status — Check swap status
- *   /wallet — Link your wallet address
+ *   /start      — Welcome & setup info
+ *   /help       — Available commands & examples
+ *   /connect    — 🔗 Securely connect NEAR wallet (Mini App or Web Link)
+ *   /disconnect — Unlink NEAR wallet
+ *   /swap       — Start a cross-chain swap
+ *   /tokens     — List supported tokens
+ *   /status     — Check swap status
+ *   /wallet     — Link your receive wallet address
+ *   /import     — Legacy private key import (not recommended)
  */
 
 import { Bot, Context, session, SessionFlavor } from "grammy";
-import { NearIntentsAgent, type AgentResponse } from "./near-intents-agent";
+import { type AgentResponse } from "./near-intents-agent";
 import { isNearAccountConfigured, getNearAccountId } from "./near-transactions";
+import {
+  getOrCreateAgent,
+  wallets,
+  nearAccounts,
+  nearLegacyCreds,
+  getAgentOpts as getAgentOptsFromStore,
+  createLinkSignature,
+} from "./telegram-store";
 
 // ============== Types ==============
 
@@ -24,46 +35,19 @@ interface SessionData {
   walletAddress?: string;
 }
 
-/** Per-user NEAR credentials for auto-execution */
-interface NearUserCredentials {
-  accountId: string;
-  privateKey: string;
-}
-
 type BotContext = Context & SessionFlavor<SessionData>;
 
-// ============== Agent Pool & Credentials ==============
+// ============== Config ==============
 
-/** One NearIntentsAgent per chat to maintain swap state (pending quotes, etc.) */
-const agents = new Map<string, NearIntentsAgent>();
-/** Per-user NEAR credentials (in-memory, cleared on restart) */
-const nearCredentials = new Map<string, NearUserCredentials>();
-const AGENT_POOL_MAX = 500;
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL ||
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
 
-function getOrCreateAgent(chatId: string): NearIntentsAgent {
-  let agent = agents.get(chatId);
-  if (!agent) {
-    agent = new NearIntentsAgent();
-    agents.set(chatId, agent);
-
-    // Evict oldest if pool grows too large
-    if (agents.size > AGENT_POOL_MAX) {
-      const oldest = agents.keys().next().value;
-      if (oldest) agents.delete(oldest);
-    }
-  }
-  return agent;
-}
-
-/** Build agent options from per-user state */
+/** Build agent options — merges session wallet with shared store */
 function getAgentOptions(chatId: string, walletAddress?: string) {
-  const creds = nearCredentials.get(chatId);
-  return {
-    userAddress: walletAddress,
-    nearAccountId: creds?.accountId,
-    nearPrivateKey: creds?.privateKey,
-    executionMode: (creds?.privateKey ? 'auto' : 'manual') as 'auto' | 'manual',
-  };
+  const opts = getAgentOptsFromStore(chatId);
+  if (walletAddress) opts.userAddress = walletAddress;
+  return opts;
 }
 
 // ============== Formatting ==============
@@ -136,16 +120,19 @@ export function createTradingBot(token: string): Bot<BotContext> {
 
   bot.command("start", async (ctx) => {
     const chatId = ctx.chat.id.toString();
-    const userCreds = nearCredentials.get(chatId);
+    const linked = nearAccounts.get(chatId);
+    const legacy = nearLegacyCreds.get(chatId);
     const walletLinked = ctx.session.walletAddress
       ? `✅ Wallet: \`${ctx.session.walletAddress.slice(0, 10)}...${ctx.session.walletAddress.slice(-6)}\``
       : "⚠️ No wallet linked — use /wallet <address>";
 
-    const nearStatus = userCreds
-      ? `✅ Your NEAR Account: \`${userCreds.accountId}\` (auto-execution)`
-      : nearOk
-        ? `ℹ️ Server NEAR Account: \`${nearAccount}\``
-        : "❌ No NEAR account — use /import to add yours";
+    const nearStatus = linked
+      ? `✅ NEAR Wallet: \`${linked}\` (connected securely)`
+      : legacy
+        ? `✅ NEAR Account: \`${legacy.accountId}\` (imported — consider /connect instead)`
+        : nearOk
+          ? `ℹ️ Server NEAR Account: \`${nearAccount}\``
+          : "❌ No NEAR account — use /connect to link yours";
 
     await ctx.reply(
       `🚀 *Welcome to NEAR Intents Swap Bot!*\n\n` +
@@ -155,12 +142,12 @@ export function createTradingBot(token: string): Bot<BotContext> {
         `• "swap 100 USDC for ETH"\n` +
         `• "quote 50 USDT to BTC"\n\n` +
         `*Commands:*\n` +
+        `/connect — 🔗 Connect NEAR wallet (secure)\n` +
+        `/disconnect — Unlink NEAR wallet\n` +
         `/swap — Start a swap\n` +
         `/tokens — Supported tokens\n` +
         `/status — Check swap status\n` +
-        `/wallet — Link your wallet\n` +
-        `/import — Import NEAR account for auto-execution\n` +
-        `/delete — Remove imported NEAR account\n` +
+        `/wallet — Link SUI/EVM receive address\n` +
         `/help — Full guide\n\n` +
         `*Setup:*\n` +
         `${nearStatus}\n` +
@@ -168,8 +155,8 @@ export function createTradingBot(token: string): Bot<BotContext> {
       {
         parse_mode: "Markdown",
         reply_markup: buildKeyboard([
+          "Connect NEAR",
           "Show tokens",
-          "Help",
           "Swap 0.01 NEAR for SUI",
         ]),
       },
@@ -181,13 +168,7 @@ export function createTradingBot(token: string): Bot<BotContext> {
   bot.command("help", async (ctx) => {
     const chatId = ctx.chat.id.toString();
     const agent = getOrCreateAgent(chatId);
-    const creds = nearCredentials.get(chatId);
-    const response = await agent.processMessage("help", {
-      userAddress: ctx.session.walletAddress,
-      nearAccountId: creds?.accountId,
-      nearPrivateKey: creds?.privateKey,
-      executionMode: creds?.privateKey ? 'auto' : 'manual',
-    });
+    const response = await agent.processMessage("help", getAgentOptions(chatId, ctx.session.walletAddress));
     await ctx.reply(formatForTelegram(response), {
       parse_mode: "Markdown",
       reply_markup: buildKeyboard(response.suggestedActions),
@@ -349,51 +330,54 @@ export function createTradingBot(token: string): Bot<BotContext> {
     );
   });
 
-  // ─── /import <accountId> <privateKey> ─────────────
+  // ─── /import <accountId> <privateKey> (legacy) ─────
 
   bot.command("import", async (ctx) => {
-    const args = ctx.match?.trim();
+    const rawArgs = (ctx.match || '').replace(/\s+/g, ' ').trim();
     const chatId = ctx.chat.id.toString();
 
-    if (!args) {
-      const existing = nearCredentials.get(chatId);
+    if (!rawArgs) {
+      const existing = nearAccounts.get(chatId) || nearLegacyCreds.get(chatId)?.accountId;
       if (existing) {
         await ctx.reply(
           `🔑 *Your NEAR Account*\n\n` +
-            `Account: \`${existing.accountId}\`\n` +
-            `Status: ✅ Imported (auto-execution enabled)\n\n` +
-            `Use /delete to remove your credentials.`,
+            `Account: \`${existing}\`\n` +
+            `Status: ✅ Connected\n\n` +
+            `Use /disconnect to remove.`,
           { parse_mode: "Markdown" },
         );
       } else {
         await ctx.reply(
-          `🔑 *Import NEAR Account*\n\n` +
-            `Import your NEAR account for auto-execution:\n` +
+          `⚠️ *Consider using /connect instead!*\n\n` +
+            `/connect lets you link your NEAR wallet securely — no private keys sent through Telegram.\n\n` +
+            `If you still want to import manually:\n` +
             `/import yourname.near ed25519:YourPrivateKey\n\n` +
             `⚠️ Your private key is stored in memory only and cleared when the bot restarts.\n` +
-            `Only import keys for accounts you control.`,
+            `🔒 We strongly recommend /connect for better security.`,
           { parse_mode: "Markdown" },
         );
       }
       return;
     }
 
-    const parts = args.split(/\s+/);
+    const parts = rawArgs.split(' ');
     if (parts.length < 2) {
       await ctx.reply(
         "⚠️ Usage: /import <account\\_id> <private\\_key>\n\n" +
-          "Example: /import myaccount.near ed25519:ABC123...",
+          "Example: /import myaccount.near ed25519:ABC123...\n\n" +
+          "💡 *Tip:* Use /connect for a more secure method!",
         { parse_mode: "Markdown" },
       );
       return;
     }
 
     const accountId = parts[0];
-    const privateKey = parts.slice(1).join(' ');
+    // Rejoin everything after accountId — handles newline-split keys
+    const privateKey = parts.slice(1).join('');
 
-    // Basic validation
+    // Validate
     if (!accountId.includes('.') && accountId.length !== 64) {
-      await ctx.reply("⚠️ Invalid NEAR account ID. Expected format: yourname.near or a 64-char implicit account.");
+      await ctx.reply("⚠️ Invalid NEAR account ID. Expected: yourname.near or 64-char implicit account.");
       return;
     }
 
@@ -403,9 +387,10 @@ export function createTradingBot(token: string): Bot<BotContext> {
     }
 
     // Store credentials
-    nearCredentials.set(chatId, { accountId, privateKey });
+    nearLegacyCreds.set(chatId, { accountId, privateKey });
+    nearAccounts.set(chatId, accountId);
 
-    // Delete the user's message containing the private key for security
+    // Delete the user's message containing the private key
     try {
       await ctx.api.deleteMessage(ctx.chat.id, ctx.message!.message_id);
     } catch {
@@ -416,9 +401,9 @@ export function createTradingBot(token: string): Bot<BotContext> {
       `✅ *NEAR Account Imported!*\n\n` +
         `Account: \`${accountId}\`\n` +
         `Auto-execution: *enabled*\n\n` +
-        `Your swaps from NEAR will now execute automatically.\n` +
-        `🔒 Your key is stored in memory only — it's cleared when the bot restarts.\n\n` +
-        `Try: "swap 0.01 NEAR for SUI"`,
+        `🔒 Key stored in memory only — cleared on restart.\n` +
+        `⚠️ Your message was deleted for security.\n\n` +
+        `💡 *Tip:* Next time use /connect for a more secure method — no private keys needed!`,
       {
         parse_mode: "Markdown",
         reply_markup: buildKeyboard(["Swap 0.01 NEAR for SUI", "Show tokens"]),
@@ -426,22 +411,95 @@ export function createTradingBot(token: string): Bot<BotContext> {
     );
   });
 
-  // ─── /delete — Remove imported credentials ────────
+  // ─── /connect — Secure NEAR wallet connection ─────
 
-  bot.command("delete", async (ctx) => {
+  bot.command("connect", async (ctx) => {
     const chatId = ctx.chat.id.toString();
-    const had = nearCredentials.has(chatId);
-    nearCredentials.delete(chatId);
+    const sig = createLinkSignature(chatId);
+    const webLinkUrl = `${APP_URL}/telegram/link-wallet?chatId=${chatId}&sig=${sig}`;
+    const miniAppUrl = `${APP_URL}/telegram/connect-wallet`;
 
-    if (had) {
+    const existing = nearAccounts.get(chatId);
+    const statusLine = existing
+      ? `\n✅ Currently connected: \`${existing}\`\n`
+      : '';
+
+    await ctx.reply(
+      `🔗 *Connect NEAR Wallet*${statusLine}\n\n` +
+        `Choose how to connect:\n\n` +
+        `*Option 1 — Mini App (Recommended)*\n` +
+        `Tap the button below to open the wallet connector right here in Telegram.\n\n` +
+        `*Option 2 — Web Link*\n` +
+        `Open this link in your browser to connect:\n` +
+        `[Connect via Browser](${webLinkUrl})\n\n` +
+        `🔒 *Both methods are secure* — your private keys never leave your wallet.`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: '🔗 Open Wallet Connector',
+                web_app: { url: miniAppUrl },
+              },
+            ],
+            [
+              {
+                text: '🌐 Open in Browser',
+                url: webLinkUrl,
+              },
+            ],
+            ...(existing
+              ? [
+                  [
+                    {
+                      text: '❌ Disconnect Current',
+                      callback_data: 'agent:disconnect',
+                    },
+                  ],
+                ]
+              : []),
+          ],
+        },
+      },
+    );
+  });
+
+  // ─── /disconnect — Remove NEAR wallet link ────────
+
+  bot.command("disconnect", async (ctx) => {
+    const chatId = ctx.chat.id.toString();
+    const hadLink = nearAccounts.has(chatId);
+    const hadLegacy = nearLegacyCreds.has(chatId);
+    nearAccounts.delete(chatId);
+    nearLegacyCreds.delete(chatId);
+
+    if (hadLink || hadLegacy) {
       await ctx.reply(
-        "🗑️ *NEAR credentials removed.*\n\nYour account has been disconnected. Swaps will now show deposit addresses for manual sending.",
+        "✅ *NEAR wallet disconnected.*\n\nYour account has been unlinked. Swaps will now show deposit addresses for manual sending.\n\nUse /connect to link a new wallet.",
         { parse_mode: "Markdown" },
       );
     } else {
+      await ctx.reply("ℹ️ No NEAR wallet linked. Use /connect to connect one.");
+    }
+  });
+
+  // ─── /delete — Alias for /disconnect ──────────────
+
+  bot.command("delete", async (ctx) => {
+    const chatId = ctx.chat.id.toString();
+    const hadLink = nearAccounts.has(chatId);
+    const hadLegacy = nearLegacyCreds.has(chatId);
+    nearAccounts.delete(chatId);
+    nearLegacyCreds.delete(chatId);
+
+    if (hadLink || hadLegacy) {
       await ctx.reply(
-        "ℹ️ No NEAR credentials to remove. Use /import to add your NEAR account.",
+        "✅ *NEAR credentials removed.*\n\nUse /connect to link a new wallet securely.",
+        { parse_mode: "Markdown" },
       );
+    } else {
+      await ctx.reply("ℹ️ No NEAR credentials to remove. Use /connect to add one.");
     }
   });
 
@@ -451,10 +509,40 @@ export function createTradingBot(token: string): Bot<BotContext> {
     const data = ctx.callbackQuery.data;
     await ctx.answerCallbackQuery();
 
+    const chatId = ctx.chat?.id.toString() || "";
+
+    // Handle "Connect NEAR" button → show /connect options
+    if (data === 'agent:Connect NEAR') {
+      const sig = createLinkSignature(chatId);
+      const webLinkUrl = `${APP_URL}/telegram/link-wallet?chatId=${chatId}&sig=${sig}`;
+      const miniAppUrl = `${APP_URL}/telegram/connect-wallet`;
+
+      await ctx.reply(
+        `🔗 *Connect NEAR Wallet*\n\nChoose how to connect:`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🔗 Open Wallet Connector', web_app: { url: miniAppUrl } }],
+              [{ text: '🌐 Open in Browser', url: webLinkUrl }],
+            ],
+          },
+        },
+      );
+      return;
+    }
+
+    // Handle "Disconnect" button
+    if (data === 'agent:disconnect') {
+      nearAccounts.delete(chatId);
+      nearLegacyCreds.delete(chatId);
+      await ctx.reply("✅ NEAR wallet disconnected. Use /connect to link a new one.");
+      return;
+    }
+
     if (!data.startsWith("agent:")) return;
 
-    const actionText = data.slice(6); // Remove "agent:" prefix
-    const chatId = ctx.chat?.id.toString() || "";
+    const actionText = data.slice(6);
     const agent = getOrCreateAgent(chatId);
 
     const response = await agent.processMessage(
