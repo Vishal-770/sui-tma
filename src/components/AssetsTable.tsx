@@ -61,23 +61,6 @@ export function AssetsTable({ network, searchQuery = "" }: AssetsTableProps) {
     refetchInterval: 30000,
   });
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-8">
-        <Activity className="h-6 w-6 animate-spin" />
-        <span className="ml-2">Loading assets...</span>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="text-center py-8 text-destructive">
-        Error loading assets. Please try again later.
-      </div>
-    );
-  }
-
   const assets = assetsData ? Object.entries(assetsData) : [];
 
   // Filter assets based on search query
@@ -94,6 +77,23 @@ export function AssetsTable({ network, searchQuery = "" }: AssetsTableProps) {
       );
     });
   }, [assets, searchQuery]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Activity className="h-6 w-6 animate-spin" />
+        <span className="ml-2">Loading assets...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-center py-8 text-destructive">
+        Error loading assets. Please try again later.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

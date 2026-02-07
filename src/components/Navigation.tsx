@@ -30,6 +30,7 @@ import {
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { CURRENT_ENV } from "@/lib/deepbook";
+import Image from "next/image";
 
 const navigation = [
   { name: "Home", href: "/" },
@@ -234,20 +235,14 @@ export function Navigation() {
                 href="/"
                 className="text-xl font-bold flex items-center gap-2"
               >
-                <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-                  <svg
-                    className="w-4 h-4 text-primary-foreground"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M13 10V3L4 14h7v7l9-11h-7z"
-                    />
-                  </svg>
+                <div className="w-8 h-8 flex items-center justify-center">
+                  <Image
+                    src="/logo-tma.png"
+                    alt="SuiTrader Logo"
+                    width={32}
+                    height={32}
+                    className="w-full h-full object-contain"
+                  />
                 </div>
                 <span className="hidden sm:inline">SuiTrader</span>
               </Link>

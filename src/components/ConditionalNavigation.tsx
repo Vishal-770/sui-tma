@@ -7,7 +7,7 @@ export function ConditionalNavigation() {
   const pathname = usePathname();
 
   // Don't show navigation on /trade routes
-  if (pathname.startsWith("/trade")) {
+  if (pathname.startsWith("/trade/")) {
     return null;
   }
 

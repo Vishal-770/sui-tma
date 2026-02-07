@@ -341,6 +341,8 @@ export default function LimitOrdersPage() {
 
     addLog("Creating Balance Manager...");
     const tx = new Transaction();
+    tx.setSender(account.address);
+    tx.setGasBudget(100_000_000); // 0.1 SUI gas budget
 
     try {
       const balanceManager = createBalanceManager({ tx, config });
@@ -468,6 +470,8 @@ export default function LimitOrdersPage() {
 
     addLog(`Depositing ${amount} ${depositCoinType}...`);
     const tx = new Transaction();
+    tx.setSender(account.address);
+    tx.setGasBudget(100_000_000); // 0.1 SUI gas budget
 
     try {
       // Get coin info from config
@@ -610,6 +614,8 @@ export default function LimitOrdersPage() {
     addLog(`  Pair: ${selectedPair}, Price: ${trigger}, Qty: ${qty}`);
 
     const tx = new Transaction();
+    tx.setSender(account.address);
+    tx.setGasBudget(150_000_000); // 0.15 SUI gas budget for limit orders
 
     try {
       // Generate unique client order ID (u64)
@@ -732,6 +738,8 @@ export default function LimitOrdersPage() {
       }
 
       const tx = new Transaction();
+      tx.setSender(account.address);
+      tx.setGasBudget(100_000_000); // 0.1 SUI gas budget
 
       try {
         // Generate trade proof

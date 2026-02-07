@@ -492,14 +492,19 @@ export default function BalanceManagerPage() {
 
   // Create Balance Manager
   const handleCreateBalanceManager = async () => {
-    if (!address) return;
+    if (!account || !account.address) {
+      setError("Please connect your wallet first");
+      return;
+    }
 
     setActionLoading("create");
     setError(null);
     setSuccess(null);
 
     try {
-      const tx = buildCreateBalanceManagerTx(address);
+      const tx = buildCreateBalanceManagerTx(account.address!);
+      tx.setSender(account.address!);
+      tx.setGasBudget(100_000_000); // 0.1 SUI gas budget
 
       signAndExecute(
         {
@@ -546,6 +551,8 @@ export default function BalanceManagerPage() {
       if (!poolInfo) throw new Error("Invalid pool selected");
 
       const tx = buildMintTradeCapTx(balanceManager.objectId, address);
+      tx.setSender(account.address);
+      tx.setGasBudget(100_000_000); // 0.1 SUI gas budget
 
       signAndExecute(
         {
@@ -590,8 +597,8 @@ export default function BalanceManagerPage() {
         Math.floor(parseFloat(depositAmount) * Math.pow(10, decimals)),
       );
 
-      // Gas reserve for SUI transactions (0.5 SUI)
-      const GAS_RESERVE = BigInt(500_000_000); // 0.5 SUI in MIST
+      // Gas reserve for SUI transactions (increase to 0.2 SUI for safety)
+      const GAS_RESERVE = BigInt(200_000_000); // 0.2 SUI in MIST
       const isSUI = selectedCoin === "SUI";
 
       // Need to get user's coins for this type
@@ -615,7 +622,7 @@ export default function BalanceManagerPage() {
         const availableForDeposit = totalBalance - GAS_RESERVE;
         if (availableForDeposit < amount) {
           throw new Error(
-            `Insufficient SUI. Need ${(Number(amount) / 1e9).toFixed(4)} SUI + gas reserve (0.5 SUI). Available: ${(Number(totalBalance) / 1e9).toFixed(4)} SUI`,
+            `Insufficient SUI. Need ${(Number(amount) / 1e9).toFixed(4)} SUI + gas reserve (0.2 SUI). Available: ${(Number(totalBalance) / 1e9).toFixed(4)} SUI`,
           );
         }
       } else {
@@ -629,6 +636,8 @@ export default function BalanceManagerPage() {
 
       // Build transaction
       const tx = new Transaction();
+      tx.setSender(account.address);
+      tx.setGasBudget(100_000_000); // 0.1 SUI gas budget
 
       let coinToDeposit;
 
@@ -744,6 +753,8 @@ export default function BalanceManagerPage() {
         amount,
         address,
       );
+      tx.setSender(account.address);
+      tx.setGasBudget(100_000_000); // 0.1 SUI gas budget
 
       signAndExecute(
         {

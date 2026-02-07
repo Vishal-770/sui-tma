@@ -44,7 +44,7 @@ const IndexerPage = () => {
           sidebarOpen ? "w-80" : "w-0"
         } border-r border-border bg-card fixed left-0 top-0 h-screen z-10 transition-all duration-300 overflow-hidden`}
       >
-        <div className="h-full overflow-y-auto">
+        <div className="h-full overflow-y-auto scrollbar-hide">
           <div className="p-6 pt-24 space-y-6">
             {/* Network Selection */}
             <div className="space-y-3">

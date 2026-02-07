@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
+import { Transaction } from "@mysten/sui/transactions";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -163,58 +163,61 @@ export default function SwapPage() {
     return getPoolByCoins(CONFIG, fromToken.symbol, toToken.symbol);
   }, [CONFIG, fromToken?.symbol, toToken?.symbol]);
 
-  // Fetch user balances
-  useEffect(() => {
+  // Fetch user balances function
+  const fetchBalances = useCallback(async () => {
     if (!account?.address) return;
 
-    const fetchBalances = async () => {
-      const newBalances: Record<string, bigint> = {};
-      const newCoinObjects: Record<string, string[]> = {};
+    const newBalances: Record<string, bigint> = {};
+    const newCoinObjects: Record<string, string[]> = {};
 
-      for (const token of AVAILABLE_TOKENS) {
-        try {
-          const coins = await suiClient.getCoins({
-            owner: account.address,
-            coinType: token.coinType,
-          });
-
-          const totalBalance = coins.data.reduce(
-            (sum, coin) => sum + BigInt(coin.balance),
-            BigInt(0),
-          );
-          newBalances[token.symbol] = totalBalance;
-          newCoinObjects[token.symbol] = coins.data.map((c) => c.coinObjectId);
-        } catch {
-          newBalances[token.symbol] = BigInt(0);
-          newCoinObjects[token.symbol] = [];
-        }
-      }
-
-      // Also fetch DEEP tokens for fees
+    for (const token of AVAILABLE_TOKENS) {
       try {
-        const deepCoins = await suiClient.getCoins({
+        const coins = await suiClient.getCoins({
           owner: account.address,
-          coinType: CONFIG.coins["DEEP"]?.type || "",
+          coinType: token.coinType,
         });
-        const deepBalance = deepCoins.data.reduce(
-          (sum, c) => sum + BigInt(c.balance),
+
+        const totalBalance = coins.data.reduce(
+          (sum, coin) => sum + BigInt(coin.balance),
           BigInt(0),
         );
-        newBalances["DEEP"] = deepBalance;
-        newCoinObjects["DEEP"] = deepCoins.data.map((c) => c.coinObjectId);
+        newBalances[token.symbol] = totalBalance;
+        newCoinObjects[token.symbol] = coins.data.map((c) => c.coinObjectId);
       } catch {
-        newBalances["DEEP"] = BigInt(0);
-        newCoinObjects["DEEP"] = [];
+        newBalances[token.symbol] = BigInt(0);
+        newCoinObjects[token.symbol] = [];
       }
+    }
 
-      setBalances(newBalances);
-      setUserCoinObjects(newCoinObjects);
-    };
+    // Also fetch DEEP tokens for fees
+    try {
+      const deepCoins = await suiClient.getCoins({
+        owner: account.address,
+        coinType: CONFIG.coins["DEEP"]?.type || "",
+      });
+      const deepBalance = deepCoins.data.reduce(
+        (sum, c) => sum + BigInt(c.balance),
+        BigInt(0),
+      );
+      newBalances["DEEP"] = deepBalance;
+      newCoinObjects["DEEP"] = deepCoins.data.map((c) => c.coinObjectId);
+    } catch {
+      newBalances["DEEP"] = BigInt(0);
+      newCoinObjects["DEEP"] = [];
+    }
+
+    setBalances(newBalances);
+    setUserCoinObjects(newCoinObjects);
+  }, [account?.address, suiClient, AVAILABLE_TOKENS, CONFIG]);
+
+  // Fetch user balances on mount and periodically
+  useEffect(() => {
+    if (!account?.address) return;
 
     fetchBalances();
     const interval = setInterval(fetchBalances, 15000);
     return () => clearInterval(interval);
-  }, [account?.address, suiClient, AVAILABLE_TOKENS, CONFIG]);
+  }, [account?.address, fetchBalances]);
 
   // Simple price estimation (1:1 for demo, real app would query orderbook)
   useEffect(() => {
@@ -290,6 +293,11 @@ export default function SwapPage() {
 
   // Execute swap
   const handleSwap = useCallback(async () => {
+    if (!account || !account.address) {
+      addLog("[ERROR] Please connect your wallet first");
+      return;
+    }
+
     const validationError = validateSwap();
     if (validationError) {
       addLog(`[ERROR] ${validationError}`);
@@ -362,19 +370,36 @@ export default function SwapPage() {
         [inputCoin] = tx.splitCoins(inputCoin, [tx.pure.u64(amountInUnits)]);
       }
 
-      // DEEP coin for fees
+      // DEEP coin for fees - get from user's wallet
       const deepBalance = balances["DEEP"] || BigInt(0);
-      const deepCoinType = CONFIG.coins["DEEP"]?.type || "";
+      const deepCoinObjects = userCoinObjects["DEEP"] || [];
 
       // Use appropriate DEEP amount for fees
       // Mainnet requires DEEP, testnet can work with zero
       const deepAmountForFees =
         deepBalance > BigInt(100000) ? 100000 : isMainnet ? 100000 : 0;
-      const deepCoin = coinWithBalance({
-        type: deepCoinType,
-        balance: deepAmountForFees,
-      });
-      addLog(`  DEEP fee: ${deepAmountForFees > 0 ? "0.1 DEEP" : "zero"}`);
+
+      let deepCoin;
+      if (deepAmountForFees > 0 && deepCoinObjects.length > 0) {
+        // Get DEEP from user's wallet
+        if (deepCoinObjects.length === 1) {
+          deepCoin = tx.object(deepCoinObjects[0]);
+        } else {
+          // Merge multiple DEEP coins
+          tx.mergeCoins(
+            tx.object(deepCoinObjects[0]),
+            deepCoinObjects.slice(1).map((id) => tx.object(id)),
+          );
+          deepCoin = tx.object(deepCoinObjects[0]);
+        }
+        // Split the fee amount
+        [deepCoin] = tx.splitCoins(deepCoin, [tx.pure.u64(deepAmountForFees)]);
+        addLog(`  DEEP fee: 0.1 DEEP`);
+      } else {
+        // For testnet with no DEEP, use a zero-balance coin
+        deepCoin = tx.splitCoins(tx.gas, [tx.pure.u64(0)])[0];
+        addLog(`  DEEP fee: zero (using gas coin)`);
+      }
 
       const swapParams = {
         tx,
@@ -402,6 +427,11 @@ export default function SwapPage() {
             setLastTx(result.digest);
             setFromAmount("");
             setToAmount("");
+
+            // Refresh balances immediately to show new tokens
+            setTimeout(() => {
+              fetchBalances();
+            }, 2000); // Wait 2 seconds for blockchain to finalize
           },
           onError: (error) => {
             addLog(`[ERROR] Swap failed: ${error.message}`);
@@ -440,6 +470,7 @@ export default function SwapPage() {
     allowZeroMinOutput,
     isMainnet,
     validateSwap,
+    fetchBalances,
   ]);
 
   if (!fromToken || !toToken) {
@@ -735,7 +766,10 @@ export default function SwapPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => window.location.reload()}
+                onClick={() => {
+                  fetchBalances();
+                  addLog("Refreshing balances...");
+                }}
                 disabled={isPending}
                 className="w-full sm:w-auto"
               >

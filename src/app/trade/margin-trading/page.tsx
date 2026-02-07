@@ -10,12 +10,43 @@ import {
 import Link from "next/link";
 import { useNetwork, useNetworkConfig } from "@/contexts/NetworkContext";
 import { NetworkToggle } from "@/components/NetworkToggle";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Menu,
+  X,
+  Wallet,
+  ArrowDownCircle,
+  ArrowUpCircle,
+  DollarSign,
+  TrendingUp,
+  AlertTriangle,
+  Info,
+  Plus,
+  Settings,
+  Activity,
+  ChevronRight,
+} from "lucide-react";
 import {
   getConfig,
   getAvailablePoolKeys,
@@ -87,6 +118,7 @@ export default function MarginTradingPage() {
   const [borrowIsBase, setBorrowIsBase] = useState(false);
   const [repayAmount, setRepayAmount] = useState("");
   const [repayIsBase, setRepayIsBase] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const addLog = useCallback((message: string) => {
     console.log("[MarginTrading]", message);
@@ -263,7 +295,7 @@ export default function MarginTradingPage() {
 
   // Create a new margin manager
   const handleCreateMarginManager = useCallback(async () => {
-    if (!account) {
+    if (!account || !account.address) {
       addLog("[ERROR] Please connect wallet first");
       return;
     }
@@ -806,372 +838,674 @@ export default function MarginTradingPage() {
     addLog,
   ]);
 
+  const getExplorerUrl = (network: string, digest: string) => {
+    return `https://suiscan.xyz/${network}/tx/${digest}`;
+  };
+
   return (
-    <div className="min-h-screen w-full bg-background text-foreground">
-      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-          <div>
-            <div className="flex items-center gap-3 mb-1">
-              <Link
-                href="/trade"
-                className="text-muted-foreground hover:text-foreground text-sm"
-              >
-                Back
-              </Link>
-              <h1 className="text-xl sm:text-2xl font-bold text-foreground">
-                Margin Trading
-              </h1>
+    <div className="min-h-screen bg-background text-foreground">
+      {/* Mobile Overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside
+        className={`fixed left-0 top-0 h-screen bg-card border-r border-border transition-all duration-300 z-40 ${
+          sidebarOpen ? "w-full sm:w-80 lg:w-80" : "w-0"
+        } overflow-hidden`}
+      >
+        <div className="h-full flex flex-col p-4 sm:p-6">
+          {/* Sidebar Header */}
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-primary" />
+              <h2 className="font-semibold text-lg">Margin Info</h2>
             </div>
-            <p className="text-sm text-muted-foreground">
-              DeepBook V3 Margin Trading with Leverage
-            </p>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSidebarOpen(false)}
+              className="lg:hidden"
+            >
+              <X className="w-5 h-5" />
+            </Button>
           </div>
-          <NetworkToggle compact />
-        </div>
 
-        {/* Mainnet Warning */}
-        {isMainnet && (
-          <div className="mb-5 p-3 bg-chart-3/10 border border-chart-3/20 rounded-lg">
-            <p className="text-chart-3 text-sm font-medium">
-              Mainnet Mode - Margin positions use real funds!
-            </p>
-          </div>
-        )}
+          <ScrollArea className="flex-1 pr-2">
+            <div className="space-y-4">
+              {/* Network Badge */}
+              <div>
+                <Label className="text-xs text-muted-foreground">Network</Label>
+                <div className="mt-1.5">
+                  <Badge
+                    variant={isMainnet ? "destructive" : "secondary"}
+                    className="text-xs"
+                  >
+                    {network.toUpperCase()}
+                  </Badge>
+                </div>
+              </div>
 
-        {/* Info Banner */}
-        <div className="mb-5 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-          <h3 className="font-medium text-blue-400 text-sm mb-1.5">
-            How Margin Trading Works
-          </h3>
-          <ol className="text-xs text-muted-foreground space-y-0.5 list-decimal list-inside">
-            <li>Create a Margin Manager for your trading pair</li>
-            <li>Deposit collateral (base or quote asset)</li>
-            <li>Borrow against your collateral at variable rates</li>
-            <li>Use borrowed funds for leveraged trading</li>
-            <li>Repay loans to avoid liquidation</li>
-          </ol>
-          <p className="mt-1.5 text-xs text-chart-3">
-            Note: Margin trading requires Pyth price oracles. Only pools with
-            price feeds are shown.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5">
-          {/* Pool & Manager Selection */}
-          <div className="lg:col-span-4 bg-muted/50 rounded-lg p-4 sm:p-5 border border-border">
-            <h2 className="text-base font-semibold mb-3">Configuration</h2>
-
-            {/* Pool Selection */}
-            <div className="mb-3">
-              <label className="block text-sm text-muted-foreground mb-1.5">
-                Trading Pool
-              </label>
-              <select
-                value={selectedPool}
-                onChange={(e) => setSelectedPool(e.target.value)}
-                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
-              >
-                {availablePools.length === 0 && (
-                  <option value="">No margin pools available</option>
-                )}
-                {availablePools.map((pool) => {
-                  const info = getPoolInfo(CONFIG, pool);
-                  return (
-                    <option key={pool} value={pool}>
-                      {pool} ({info?.baseCoin}/{info?.quoteCoin})
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-
-            {/* Margin Manager Selection */}
-            <div className="mb-3">
-              <label className="block text-sm text-muted-foreground mb-1.5">
-                Margin Manager
-              </label>
-              {marginManagers.length === 0 ? (
-                <p className="text-xs text-chart-3 mb-1.5">
-                  No margin manager found. Create one or add manually.
-                </p>
-              ) : (
-                <select
-                  value={selectedManager}
-                  onChange={(e) => setSelectedManager(e.target.value)}
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
-                >
-                  {marginManagers.map((manager) => (
-                    <option key={manager.id} value={manager.id}>
-                      {manager.id.slice(0, 16)}...{manager.id.slice(-8)}
-                    </option>
-                  ))}
-                </select>
+              {isMainnet && (
+                <Alert variant="destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertDescription className="text-xs">
+                    Mainnet mode - real funds at risk!
+                  </AlertDescription>
+                </Alert>
               )}
 
-              {/* Manual Manager ID Input */}
-              <Button
-                type="button"
-                onClick={() => setShowManualInput(!showManualInput)}
-                className="mt-2 text-xs text-primary hover:text-primary"
-              >
-                {showManualInput
-                  ? "Hide manual input"
-                  : "+ Add manager ID manually"}
-              </Button>
+              <Separator />
 
-              {showManualInput && (
-                <div className="mt-2 space-y-2">
-                  <input
-                    type="text"
-                    value={manualManagerId}
-                    onChange={(e) => setManualManagerId(e.target.value)}
-                    placeholder="0x... (paste manager ID from tx)"
-                    className="w-full bg-background border border-border rounded-lg px-3 py-2 text-xs outline-none focus:border-primary"
-                  />
-                  <Button
-                    type="button"
-                    onClick={handleAddManualManager}
-                    className="w-full py-2 bg-muted hover:bg-muted rounded-lg text-sm transition-colors"
-                  >
-                    Add Manager
-                  </Button>
+              {/* Selected Pool */}
+              <div>
+                <Label className="text-xs text-muted-foreground">
+                  Trading Pool
+                </Label>
+                <div className="mt-1.5">
+                  {poolInfo ? (
+                    <div className="space-y-1">
+                      <Badge variant="outline" className="font-mono text-xs">
+                        {selectedPool}
+                      </Badge>
+                      <p className="text-xs text-muted-foreground">
+                        {poolInfo.baseCoin} / {poolInfo.quoteCoin}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No pool selected
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Margin Manager */}
+              <div>
+                <Label className="text-xs text-muted-foreground">
+                  Margin Manager
+                </Label>
+                <div className="mt-1.5">
+                  {selectedManager ? (
+                    <div className="space-y-1">
+                      <p className="text-xs font-mono break-all text-foreground">
+                        {selectedManager}
+                      </p>
+                      <Badge variant="secondary" className="text-xs">
+                        Active
+                      </Badge>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No manager selected
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {marginManagers.length > 0 && (
+                <div>
+                  <Label className="text-xs text-muted-foreground">
+                    Saved Managers ({marginManagers.length})
+                  </Label>
+                  <div className="mt-1.5 space-y-1">
+                    {marginManagers.map((mgr) => (
+                      <div
+                        key={mgr.id}
+                        className={`text-xs font-mono p-2 rounded border ${
+                          selectedManager === mgr.id
+                            ? "bg-primary/10 border-primary/50"
+                            : "bg-muted border-border"
+                        }`}
+                      >
+                        {mgr.id.slice(0, 12)}...{mgr.id.slice(-6)}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {selectedManager && (
-                <p className="mt-2 text-xs text-muted-foreground break-all">
-                  Selected: {selectedManager}
-                </p>
+              <Separator />
+
+              {/* How It Works */}
+              <div>
+                <Label className="text-xs text-muted-foreground flex items-center gap-1.5 mb-2">
+                  <Info className="w-3 h-3" />
+                  How It Works
+                </Label>
+                <div className="space-y-2 text-xs text-muted-foreground">
+                  <div className="flex items-start gap-2">
+                    <span className="text-primary font-bold">1.</span>
+                    <span>Create a Margin Manager for your trading pair</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-primary font-bold">2.</span>
+                    <span>Deposit collateral (base or quote asset)</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-primary font-bold">3.</span>
+                    <span>Borrow against collateral at variable rates</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-primary font-bold">4.</span>
+                    <span>Use borrowed funds for leveraged trading</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-primary font-bold">5.</span>
+                    <span>Repay loans to avoid liquidation</span>
+                  </div>
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Risk Warning */}
+              <Alert>
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription className="text-xs">
+                  Margin trading involves significant risk. Borrowed positions
+                  accrue interest and may be liquidated if collateral falls
+                  below the required ratio.
+                </AlertDescription>
+              </Alert>
+
+              {lastTx && (
+                <>
+                  <Separator />
+                  <div>
+                    <Label className="text-xs text-muted-foreground">
+                      Last Transaction
+                    </Label>
+                    <a
+                      href={getExplorerUrl(network, lastTx)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1.5 text-xs text-primary hover:underline break-all block"
+                    >
+                      {lastTx.slice(0, 20)}...
+                    </a>
+                  </div>
+                </>
               )}
             </div>
+          </ScrollArea>
+        </div>
+      </aside>
 
-            {/* Create Manager Button */}
-            <Button
-              type="button"
-              onClick={handleCreateMarginManager}
-              disabled={isPending || !account || !selectedPool}
-              className="w-full py-2.5 bg-primary hover:bg-primary rounded-lg font-semibold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isPending ? "Creating..." : "Create New Margin Manager"}
-            </Button>
-
-            {!account && (
-              <p className="text-center text-xs text-muted-foreground mt-2">
-                Connect wallet to trade
-              </p>
-            )}
-          </div>
-
-          {/* Operations */}
-          <div className="lg:col-span-4 bg-muted/50 rounded-lg p-4 sm:p-5 border border-border">
-            <h2 className="text-base font-semibold mb-3">
-              Collateral & Borrowing
-            </h2>
-
-            {/* Deposit Section */}
-            <div className="mb-4 p-3 bg-background/50 rounded-lg">
-              <h3 className="text-sm font-medium text-chart-2 mb-2">
-                Deposit Collateral
-              </h3>
-              <div className="flex gap-2 mb-3">
-                <input
-                  type="number"
-                  value={depositAmount}
-                  onChange={(e) => setDepositAmount(e.target.value)}
-                  placeholder="Amount"
-                  className="flex-1 bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <select
-                  value={depositCoinType}
-                  onChange={(e) =>
-                    setDepositCoinType(e.target.value as "base" | "quote")
-                  }
-                  className="bg-muted border border-border rounded-lg px-2 py-2 text-sm outline-none"
-                >
-                  <option value="base">{poolInfo?.baseCoin || "Base"}</option>
-                  <option value="quote">
-                    {poolInfo?.quoteCoin || "Quote"}
-                  </option>
-                </select>
-              </div>
+      {/* Main Content */}
+      <main
+        className={`transition-all duration-300 ${
+          sidebarOpen ? "lg:pl-80" : "pl-0"
+        }`}
+      >
+        <div className="p-4 sm:p-6 lg:p-8">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
               <Button
-                type="button"
-                onClick={handleDeposit}
-                disabled={isPending || !account || !selectedManager}
-                className="w-full py-2 bg-chart-2/20 text-chart-2 hover:bg-chart-2/30 rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
+                variant="ghost"
+                size="icon"
+                onClick={() => setSidebarOpen(!sidebarOpen)}
               >
-                Deposit
+                <Menu className="w-5 h-5" />
               </Button>
-              {!selectedManager && account && (
-                <p className="text-xs text-chart-3 mt-1">
-                  Select or add a margin manager first
+              <div>
+                <h1 className="text-2xl font-bold">Margin Trading</h1>
+                <p className="text-sm text-muted-foreground">
+                  DeepBook V3 leveraged positions
                 </p>
-              )}
-            </div>
-
-            {/* Withdraw Section */}
-            <div className="mb-4 p-3 bg-background/50 rounded-lg">
-              <h3 className="text-sm font-medium text-orange-400 mb-2">
-                Withdraw Collateral
-              </h3>
-              <div className="flex gap-2 mb-3">
-                <input
-                  type="number"
-                  value={withdrawAmount}
-                  onChange={(e) => setWithdrawAmount(e.target.value)}
-                  placeholder="Amount"
-                  className="flex-1 bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <select
-                  value={withdrawCoinType}
-                  onChange={(e) =>
-                    setWithdrawCoinType(e.target.value as "base" | "quote")
-                  }
-                  className="bg-muted border border-border rounded-lg px-2 py-2 text-sm outline-none"
-                >
-                  <option value="base">{poolInfo?.baseCoin || "Base"}</option>
-                  <option value="quote">
-                    {poolInfo?.quoteCoin || "Quote"}
-                  </option>
-                </select>
               </div>
-              <Button
-                type="button"
-                onClick={handleWithdraw}
-                disabled={isPending || !account || !selectedManager}
-                className="w-full py-2 bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
-              >
-                Withdraw
-              </Button>
             </div>
-
-            {/* Borrow Section */}
-            <div className="p-3 bg-background/50 rounded-lg">
-              <h3 className="text-sm font-medium text-primary mb-2">
-                Borrow from Pool
-              </h3>
-              <div className="flex gap-2 mb-3">
-                <input
-                  type="number"
-                  value={borrowAmount}
-                  onChange={(e) => setBorrowAmount(e.target.value)}
-                  placeholder="Amount"
-                  className="flex-1 bg-muted border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <select
-                  value={borrowIsBase ? "base" : "quote"}
-                  onChange={(e) => setBorrowIsBase(e.target.value === "base")}
-                  className="bg-muted border border-border rounded-lg px-2 py-2 text-sm outline-none"
-                >
-                  <option value="base">{poolInfo?.baseCoin || "Base"}</option>
-                  <option value="quote">
-                    {poolInfo?.quoteCoin || "Quote"}
-                  </option>
-                </select>
-              </div>
-              <Button
-                type="button"
-                onClick={handleBorrow}
-                disabled={isPending || !account || !selectedManager}
-                className="w-full py-2 bg-primary/20 text-primary hover:bg-primary/30 rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
-              >
-                Borrow
-              </Button>
+            <div className="flex items-center gap-3">
+              <NetworkToggle compact />
+              <Link href="/trade">
+                <Button variant="outline" size="sm">
+                  Back to Trade
+                </Button>
+              </Link>
             </div>
           </div>
 
-          {/* Repay & Activity */}
-          <div className="lg:col-span-4 space-y-4">
-            {/* Repay Section */}
-            <div className="bg-muted/50 rounded-lg p-4 sm:p-5 border border-border">
-              <h2 className="text-base font-semibold mb-3">Repay Loan</h2>
-              <div className="flex gap-2 mb-3">
-                <input
-                  type="number"
-                  value={repayAmount}
-                  onChange={(e) => setRepayAmount(e.target.value)}
-                  placeholder="Amount (empty = all)"
-                  className="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <select
-                  value={repayIsBase ? "base" : "quote"}
-                  onChange={(e) => setRepayIsBase(e.target.value === "base")}
-                  className="bg-background border border-border rounded-lg px-2 py-2 text-sm outline-none"
-                >
-                  <option value="base">{poolInfo?.baseCoin || "Base"}</option>
-                  <option value="quote">
-                    {poolInfo?.quoteCoin || "Quote"}
-                  </option>
-                </select>
-              </div>
-              <Button
-                type="button"
-                onClick={handleRepay}
-                disabled={isPending || !account || !selectedManager}
-                className="w-full py-2.5 bg-purple-500 hover:bg-purple-400 rounded-lg font-semibold text-sm transition-colors disabled:opacity-50"
-              >
-                {repayAmount ? "Repay Amount" : "Repay All"}
-              </Button>
-            </div>
+          {/* Info Banner */}
+          {availablePools.length === 0 && (
+            <Alert className="mb-6">
+              <Info className="h-4 w-4" />
+              <AlertDescription className="text-sm">
+                No margin pools available. Margin trading requires Pyth price
+                oracles. Only pools with price feeds are shown.
+              </AlertDescription>
+            </Alert>
+          )}
 
-            {/* Activity Log */}
-            <div className="bg-muted/50 rounded-lg p-4 sm:p-5 border border-border">
-              <h2 className="text-base font-semibold mb-3">Activity Log</h2>
-              <div className="bg-background/50 rounded-lg p-2.5 h-40 overflow-y-auto font-mono text-xs">
-                {logs.length === 0 ? (
-                  <p className="text-muted-foreground">No activity yet...</p>
-                ) : (
-                  logs.map((log, i) => (
-                    <p key={i} className="text-muted-foreground mb-1">
-                      {log}
-                    </p>
-                  ))
+          {/* Configuration Section */}
+          <Card className="mb-6">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Settings className="w-5 h-5 text-primary" />
+                <CardTitle>Configuration</CardTitle>
+              </div>
+              <CardDescription>
+                Select pool and margin manager to get started
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Pool Selection */}
+                <div className="space-y-2">
+                  <Label htmlFor="pool-select">Trading Pool</Label>
+                  <Select value={selectedPool} onValueChange={setSelectedPool}>
+                    <SelectTrigger id="pool-select">
+                      <SelectValue placeholder="Select pool" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availablePools.length === 0 ? (
+                        <SelectItem value="none" disabled>
+                          No margin pools available
+                        </SelectItem>
+                      ) : (
+                        availablePools.map((pool) => {
+                          const info = getPoolInfo(CONFIG, pool);
+                          return (
+                            <SelectItem key={pool} value={pool}>
+                              {pool} ({info?.baseCoin}/{info?.quoteCoin})
+                            </SelectItem>
+                          );
+                        })
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Margin Manager Selection */}
+                <div className="space-y-2">
+                  <Label htmlFor="manager-select">Margin Manager</Label>
+                  {marginManagers.length === 0 ? (
+                    <div>
+                      <Input
+                        id="manager-select"
+                        value="No manager available"
+                        disabled
+                        className="mb-2"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Create one or add manually below
+                      </p>
+                    </div>
+                  ) : (
+                    <Select
+                      value={selectedManager}
+                      onValueChange={setSelectedManager}
+                    >
+                      <SelectTrigger id="manager-select">
+                        <SelectValue placeholder="Select manager" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {marginManagers.map((manager) => (
+                          <SelectItem key={manager.id} value={manager.id}>
+                            {manager.id.slice(0, 16)}...{manager.id.slice(-8)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              </div>
+
+              {/* Add Manager Manually */}
+              <div className="space-y-2 border-t border-border pt-4">
+                <Button
+                  variant="link"
+                  size="sm"
+                  onClick={() => setShowManualInput(!showManualInput)}
+                  className="h-auto p-0 text-xs"
+                >
+                  <Plus className="w-3 h-3 mr-1" />
+                  {showManualInput
+                    ? "Hide manual input"
+                    : "Add manager ID manually"}
+                </Button>
+
+                {showManualInput && (
+                  <div className="flex gap-2">
+                    <Input
+                      type="text"
+                      value={manualManagerId}
+                      onChange={(e) => setManualManagerId(e.target.value)}
+                      placeholder="0x... (paste manager ID from transaction)"
+                      className="flex-1 text-xs"
+                    />
+                    <Button
+                      onClick={handleAddManualManager}
+                      size="sm"
+                      disabled={!manualManagerId}
+                    >
+                      Add
+                    </Button>
+                  </div>
                 )}
               </div>
-            </div>
-          </div>
-        </div>
 
-        {/* Last Transaction */}
-        {lastTx && (
-          <div className="mt-5 p-3 bg-chart-2/10 border border-green-500/20 rounded-lg">
-            <p className="text-xs text-chart-2">
-              Last TX:{" "}
-              <a
-                href={`https://suiscan.xyz/${network}/tx/${lastTx}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-chart-2"
+              {/* Create Manager Button */}
+              <Button
+                onClick={handleCreateMarginManager}
+                disabled={isPending || !account || !selectedPool}
+                className="w-full max-w-md mx-auto"
+                size="lg"
               >
-                {lastTx.slice(0, 20)}...
-              </a>
-            </p>
-          </div>
-        )}
+                <Plus className="w-4 h-4 mr-2" />
+                {isPending ? "Creating..." : "Create New Margin Manager"}
+              </Button>
 
-        {/* Risk Warning */}
-        <div className="mt-4 p-3 bg-orange-500/10 border border-orange-500/20 rounded-lg">
-          <h3 className="font-medium text-orange-400 text-sm mb-1">
-            Risk Warning
-          </h3>
-          <p className="text-xs text-muted-foreground">
-            Margin trading involves significant risk. Borrowed positions accrue
-            interest and may be liquidated if your collateral falls below the
-            required ratio.
-          </p>
-        </div>
+              {!account && (
+                <p className="text-center text-xs text-muted-foreground">
+                  Connect wallet to create margin manager
+                </p>
+              )}
+            </CardContent>
+          </Card>
 
-        {/* Back Link */}
-        <div className="mt-6 text-center">
-          <Link
-            href="/trade"
-            className="text-primary hover:text-primary text-sm transition-colors"
-          >
-            Back to Trade
-          </Link>
+          {/* Operations Tabs */}
+          <Tabs defaultValue="collateral" className="mb-6">
+            <TabsList className="grid w-full grid-cols-4">
+              <TabsTrigger value="collateral">
+                <Wallet className="w-4 h-4 mr-2" />
+                Deposit
+              </TabsTrigger>
+              <TabsTrigger value="withdraw">
+                <ArrowUpCircle className="w-4 h-4 mr-2" />
+                Withdraw
+              </TabsTrigger>
+              <TabsTrigger value="borrow">
+                <DollarSign className="w-4 h-4 mr-2" />
+                Borrow
+              </TabsTrigger>
+              <TabsTrigger value="repay">
+                <ArrowDownCircle className="w-4 h-4 mr-2" />
+                Repay
+              </TabsTrigger>
+            </TabsList>
+
+            {/* Deposit Tab */}
+            <TabsContent value="collateral">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">
+                    Deposit Collateral
+                  </CardTitle>
+                  <CardDescription>
+                    Add funds to your margin manager as collateral
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="deposit-amount">Amount</Label>
+                      <Input
+                        id="deposit-amount"
+                        type="number"
+                        value={depositAmount}
+                        onChange={(e) => setDepositAmount(e.target.value)}
+                        placeholder="0.0"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="deposit-coin">Coin Type</Label>
+                      <Select
+                        value={depositCoinType}
+                        onValueChange={(value: "base" | "quote") =>
+                          setDepositCoinType(value)
+                        }
+                      >
+                        <SelectTrigger id="deposit-coin">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="base">
+                            {poolInfo?.baseCoin || "Base"}
+                          </SelectItem>
+                          <SelectItem value="quote">
+                            {poolInfo?.quoteCoin || "Quote"}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <Button
+                    onClick={handleDeposit}
+                    disabled={isPending || !account || !selectedManager}
+                    className="w-full max-w-md mx-auto"
+                    size="lg"
+                  >
+                    <ArrowDownCircle className="w-4 h-4 mr-2" />
+                    Deposit Collateral
+                  </Button>
+                  {!selectedManager && account && (
+                    <p className="text-xs text-muted-foreground text-center">
+                      Select or create a margin manager first
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Withdraw Tab */}
+            <TabsContent value="withdraw">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">
+                    Withdraw Collateral
+                  </CardTitle>
+                  <CardDescription>
+                    Remove funds from your margin manager
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="withdraw-amount">Amount</Label>
+                      <Input
+                        id="withdraw-amount"
+                        type="number"
+                        value={withdrawAmount}
+                        onChange={(e) => setWithdrawAmount(e.target.value)}
+                        placeholder="0.0"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="withdraw-coin">Coin Type</Label>
+                      <Select
+                        value={withdrawCoinType}
+                        onValueChange={(value: "base" | "quote") =>
+                          setWithdrawCoinType(value)
+                        }
+                      >
+                        <SelectTrigger id="withdraw-coin">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="base">
+                            {poolInfo?.baseCoin || "Base"}
+                          </SelectItem>
+                          <SelectItem value="quote">
+                            {poolInfo?.quoteCoin || "Quote"}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <Button
+                    onClick={handleWithdraw}
+                    disabled={isPending || !account || !selectedManager}
+                    className="w-full max-w-md mx-auto"
+                    size="lg"
+                    variant="secondary"
+                  >
+                    <ArrowUpCircle className="w-4 h-4 mr-2" />
+                    Withdraw Collateral
+                  </Button>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Borrow Tab */}
+            <TabsContent value="borrow">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Borrow from Pool</CardTitle>
+                  <CardDescription>
+                    Borrow against your collateral at variable rates
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="borrow-amount">Amount</Label>
+                      <Input
+                        id="borrow-amount"
+                        type="number"
+                        value={borrowAmount}
+                        onChange={(e) => setBorrowAmount(e.target.value)}
+                        placeholder="0.0"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="borrow-coin">Coin Type</Label>
+                      <Select
+                        value={borrowIsBase ? "base" : "quote"}
+                        onValueChange={(value) =>
+                          setBorrowIsBase(value === "base")
+                        }
+                      >
+                        <SelectTrigger id="borrow-coin">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="base">
+                            {poolInfo?.baseCoin || "Base"}
+                          </SelectItem>
+                          <SelectItem value="quote">
+                            {poolInfo?.quoteCoin || "Quote"}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <Alert>
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertDescription className="text-xs">
+                      Borrowed funds accrue interest over time. Monitor your
+                      position to avoid liquidation.
+                    </AlertDescription>
+                  </Alert>
+                  <Button
+                    onClick={handleBorrow}
+                    disabled={isPending || !account || !selectedManager}
+                    className="w-full max-w-md mx-auto"
+                    size="lg"
+                  >
+                    <DollarSign className="w-4 h-4 mr-2" />
+                    Borrow from Pool
+                  </Button>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Repay Tab */}
+            <TabsContent value="repay">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Repay Loan</CardTitle>
+                  <CardDescription>
+                    Return borrowed funds to close or reduce your position
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="repay-amount">Amount</Label>
+                      <Input
+                        id="repay-amount"
+                        type="number"
+                        value={repayAmount}
+                        onChange={(e) => setRepayAmount(e.target.value)}
+                        placeholder="Empty = repay all"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Leave empty to repay full loan amount
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="repay-coin">Coin Type</Label>
+                      <Select
+                        value={repayIsBase ? "base" : "quote"}
+                        onValueChange={(value) =>
+                          setRepayIsBase(value === "base")
+                        }
+                      >
+                        <SelectTrigger id="repay-coin">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="base">
+                            {poolInfo?.baseCoin || "Base"}
+                          </SelectItem>
+                          <SelectItem value="quote">
+                            {poolInfo?.quoteCoin || "Quote"}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <Button
+                    onClick={handleRepay}
+                    disabled={isPending || !account || !selectedManager}
+                    className="w-full max-w-md mx-auto"
+                    size="lg"
+                    variant="destructive"
+                  >
+                    <ArrowDownCircle className="w-4 h-4 mr-2" />
+                    {repayAmount ? "Repay Amount" : "Repay All"}
+                  </Button>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+
+          {/* Activity Log */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Activity className="w-5 h-5 text-primary" />
+                <CardTitle>Activity Log</CardTitle>
+              </div>
+              <CardDescription>
+                Recent margin trading operations
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className="h-64 w-full rounded border border-border p-4">
+                <div className="space-y-1 font-mono text-xs">
+                  {logs.length === 0 ? (
+                    <p className="text-muted-foreground">No activity yet...</p>
+                  ) : (
+                    logs.map((log, i) => (
+                      <p key={i} className="text-muted-foreground">
+                        {log}
+                      </p>
+                    ))
+                  )}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

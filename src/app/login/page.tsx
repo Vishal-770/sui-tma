@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import Image from "next/image";
 
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -97,19 +98,13 @@ export default function LoginPage() {
       <div className="flex-1 flex flex-col items-center justify-center text-center pt-5">
         {/* Logo */}
         <div className="w-18 h-18 rounded-2xl mb-6 flex items-center justify-center shrink-0 bg-linear-to-br from-primary to-primary/70 shadow-lg">
-          <svg
-            className="w-9 h-9 text-primary-foreground"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-            />
-          </svg>
+          <Image
+            src="/logo-tma.png"
+            alt="SuiTrader Logo"
+            width={72}
+            height={72}
+            className="w-9 h-9 object-contain"
+          />
         </div>
 
         {/* Title */}

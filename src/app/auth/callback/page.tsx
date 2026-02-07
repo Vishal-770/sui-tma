@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import Image from "next/image";
 
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -216,20 +217,14 @@ export default function AuthCallbackPage() {
         <div className="text-center space-y-4">
           {status === "processing" && (
             <>
-              <div className="w-16 h-16 mx-auto rounded-2xl bg-linear-to-br from-primary to-primary/70 flex items-center justify-center shadow-lg">
-                <svg
-                  className="w-8 h-8 text-primary-foreground"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-                  />
-                </svg>
+              <div className="w-16 h-16 mx-auto rounded-2xl flex items-center justify-center">
+                <Image
+                  src="/logo-tma.png"
+                  alt="SuiTrader Logo"
+                  width={64}
+                  height={64}
+                  className="w-12 h-12 object-contain"
+                />
               </div>
               <h2 className="text-2xl font-semibold text-foreground">
                 Setting up your wallet
