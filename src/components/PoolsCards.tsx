@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import axios from "axios";
 import { MarketFiltersType } from "@/components/MarketFilters";
 import { useState, useEffect, useMemo } from "react";
-import { Activity, TrendingUp, TrendingDown } from "lucide-react";
+import { Activity, TrendingUp, TrendingDown, Loader } from "lucide-react";
 import Link from "next/link";
 import {
   Table,
@@ -274,9 +274,11 @@ export function PoolsCards({ network, filters }: PoolsTableProps) {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-8">
-        <Activity className="h-6 w-6 animate-spin" />
-        <span className="ml-2">Loading market data...</span>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="flex items-center justify-center">
+          <Loader className="h-6 w-6 animate-spin" />
+          <span className="ml-2">Loading market data...</span>
+        </div>
       </div>
     );
   }

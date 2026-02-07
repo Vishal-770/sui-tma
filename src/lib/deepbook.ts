@@ -11,7 +11,7 @@
 import { Transaction } from "@mysten/sui/transactions";
 import {
   DeepBookTradingClient,
-  createDeepBookClient,
+  createDeepBookTradingClient,
   TESTNET_COINS,
   MAINNET_COINS,
   TESTNET_POOLS,
@@ -30,7 +30,7 @@ import {
 // Re-export for convenience
 export {
   DeepBookTradingClient,
-  createDeepBookClient,
+  createDeepBookTradingClient,
   ORDER_TYPE,
   SELF_MATCHING_OPTION,
   FLOAT_SCALAR,
@@ -331,7 +331,7 @@ let globalClient: DeepBookTradingClient | null = null;
  */
 export function getDeepBookClient(address: string): DeepBookTradingClient {
   if (!globalClient || globalClient["address"] !== address) {
-    globalClient = createDeepBookClient(CURRENT_ENV, address);
+    globalClient = createDeepBookTradingClient(CURRENT_ENV, address);
   }
   return globalClient;
 }
@@ -999,9 +999,7 @@ export function getCoinDecimals(coinSymbol: string): number {
 /**
  * Calculate arbitrage opportunity
  */
-export async function findArbitrageOpportunity(
-  poolKeys: string[],
-): Promise<{
+export async function findArbitrageOpportunity(poolKeys: string[]): Promise<{
   exists: boolean;
   pools: string[];
   estimatedProfit: number;
@@ -1150,7 +1148,7 @@ export default {
   DEMO_MODE,
 
   // Client
-  createDeepBookClient,
+  createDeepBookTradingClient,
   getDeepBookClient,
 
   // Price fetching

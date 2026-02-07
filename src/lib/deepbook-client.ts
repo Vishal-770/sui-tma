@@ -9,15 +9,22 @@
  */
 
 import { deepbook, type DeepBookClient } from "@mysten/deepbook-v3";
-import type { BalanceManager, Coin, Pool } from "@mysten/deepbook-v3";
-import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from "@mysten/sui/jsonRpc";
+import type {
+  BalanceManager,
+  Coin,
+  Pool,
+  MarginManager,
+} from "@mysten/deepbook-v3";
+import { CoreClient, type ClientWithExtensions } from "@mysten/sui/client";
+import { SuiGrpcClient } from "@mysten/sui/grpc";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 
-// Type alias for client
-type SuiClient = SuiJsonRpcClient;
-type ClientWithExtensions<T> = any;
+// Type for DeepBook extended client
+export type DeepBookExtendedClient = ClientWithExtensions<{
+  deepbook: DeepBookClient;
+}>;
 
 // Type definitions for coin/pool maps
 export type CoinMapType = Record<string, Coin>;
@@ -37,6 +44,15 @@ export const NETWORK_CONFIG = {
     indexerUrl: "https://deepbook-indexer.mainnet.sui.io",
   },
 };
+
+// ============== Margin Manager Types ==============
+
+export interface MarginManagerConfig {
+  address: string;
+  poolKey: string;
+}
+
+export type MarginManagerMap = Record<string, MarginManagerConfig>;
 
 // ============== DeepBook V3 Contract Addresses ==============
 // From official SDK: https://github.com/MystenLabs/ts-sdks/blob/main/packages/deepbook-v3/src/utils/constants.ts
@@ -286,12 +302,106 @@ export interface BalanceManagerInfo {
   withdrawCap?: string;
 }
 
+// ============== DeepBook Client Factory ==============
+
+/**
+ * Create a DeepBook-extended Sui client for transaction building
+ * This client is used to build transactions with the SDK, then signed with DappKit
+ *
+ * Uses SuiGrpcClient with $extend support for DeepBook SDK
+ * Pattern from: https://sdk.mystenlabs.com/sui/migrations/sui-2.0/deepbook-v3
+ */
+export function createDeepBookClient(params: {
+  env: NetworkEnv;
+  address: string;
+  balanceManagers?: { [key: string]: BalanceManager };
+  marginManagers?: MarginManagerMap;
+}): DeepBookExtendedClient {
+  const { env, address, balanceManagers, marginManagers } = params;
+
+  // Convert MarginManagerMap to SDK format
+  const sdkMarginManagers: { [key: string]: MarginManager } | undefined =
+    marginManagers
+      ? Object.fromEntries(
+          Object.entries(marginManagers).map(([key, config]) => [
+            key,
+            {
+              address: config.address,
+              poolKey: config.poolKey,
+            } as MarginManager,
+          ]),
+        )
+      : undefined;
+
+  // Create SuiGrpcClient and extend with DeepBook SDK
+  // This is the official pattern for DeepBook v3 SDK usage
+  try {
+    const extendedClient = new SuiGrpcClient({
+      baseUrl: NETWORK_CONFIG[env].rpcUrl,
+      network: env,
+    }).$extend(
+      deepbook({
+        address,
+        balanceManagers: balanceManagers || {},
+        marginManagers: sdkMarginManagers,
+      }),
+    ) as DeepBookExtendedClient;
+
+    return extendedClient;
+  } catch (error) {
+    console.error('Failed to extend Sui client with DeepBook:', error);
+    throw new Error(`Failed to create DeepBook client: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Query margin manager state from on-chain object
+ * Returns deposited and borrowed amounts for a margin manager
+ */
+export async function queryMarginManagerState(params: {
+  client: any; // Accept either SuiClient or CoreClient
+  marginManagerId: string;
+}): Promise<{
+  baseDeposited: bigint;
+  quoteDeposited: bigint;
+  deepDeposited: bigint;
+  baseBorrowed: bigint;
+  quoteBorrowed: bigint;
+} | null> {
+  const { client, marginManagerId } = params;
+
+  try {
+    const object = await client.getObject({
+      id: marginManagerId,
+      options: { showContent: true },
+    });
+
+    if (!object.data || object.data.content?.dataType !== "moveObject") {
+      return null;
+    }
+
+    const fields = object.data.content.fields as any;
+
+    // Parse margin manager fields (adjust based on actual Move struct)
+    return {
+      baseDeposited: BigInt(fields.base_deposited || 0),
+      quoteDeposited: BigInt(fields.quote_deposited || 0),
+      deepDeposited: BigInt(fields.deep_deposited || 0),
+      baseBorrowed: BigInt(fields.base_borrowed || 0),
+      quoteBorrowed: BigInt(fields.quote_borrowed || 0),
+    };
+  } catch (error) {
+    console.error("Failed to query margin manager state:", error);
+    return null;
+  }
+}
+
 // ============== DeepBook Trading Client ==============
 
 export class DeepBookTradingClient {
   private client: ClientWithExtensions<{ deepbook: DeepBookClient }> | null =
     null;
-  private suiClient: SuiClient;
+  private suiClient: any; // Legacy - not actively used
   private env: NetworkEnv;
   private address: string;
   private balanceManagers: { [key: string]: BalanceManager };
@@ -301,10 +411,10 @@ export class DeepBookTradingClient {
     this.address = config.address;
     this.balanceManagers = config.balanceManagers || {};
 
-    this.suiClient = new SuiJsonRpcClient({
-      url: NETWORK_CONFIG[config.env].rpcUrl,
-      network: config.env === "mainnet" ? "mainnet" : "testnet",
-    });
+    // Note: CoreClient cannot be instantiated directly (it's abstract)
+    // For now, this class is kept for backward compatibility but not actively used
+    // Use createDeepBookClient() with useSuiClient() hook instead
+    this.suiClient = null as any;
   }
 
   /**
@@ -319,7 +429,7 @@ export class DeepBookTradingClient {
   /**
    * Get the underlying Sui client
    */
-  getSuiClient(): SuiClient {
+  getSuiClient(): any {
     return this.suiClient;
   }
 
@@ -845,17 +955,9 @@ export class DeepBookTradingClient {
     balanceManagerId: string,
     coinType: string,
   ): Promise<bigint> {
-    try {
-      const result = await this.suiClient.getDynamicFieldObject({
-        parentId: balanceManagerId,
-        name: { type: "0x1::type_name::TypeName", value: coinType },
-      });
-      if (result.data?.content && "fields" in result.data.content) {
-        return BigInt((result.data.content.fields as any).balance || 0);
-      }
-    } catch (error) {
-      console.warn("Failed to get manager balance:", error);
-    }
+    // Legacy method - deprecated
+    // Use the new SDK approach with createDeepBookClient() instead
+    console.warn("DeepBookTradingClient.getManagerBalance is deprecated");
     return BigInt(0);
   }
 }
@@ -863,9 +965,9 @@ export class DeepBookTradingClient {
 // ============== Helper Functions ==============
 
 /**
- * Create a DeepBook client instance
+ * Create a DeepBook trading client instance (legacy class-based approach)
  */
-export function createDeepBookClient(
+export function createDeepBookTradingClient(
   env: NetworkEnv,
   address: string,
   balanceManagers?: { [key: string]: BalanceManager },

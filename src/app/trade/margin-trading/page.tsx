@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Transaction, coinWithBalance } from "@mysten/sui/transactions";
+import { Transaction } from "@mysten/sui/transactions";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -51,22 +51,21 @@ import {
   getConfig,
   getAvailablePoolKeys,
   getPoolInfo,
-  getAvailableMarginPoolKeys,
-  getMarginPoolInfo,
   isMarginTradingAvailable,
-  createMarginManager,
-  createMarginManagerWithInitializer,
-  shareMarginManager,
-  depositMargin,
-  withdrawMargin,
-  borrowFromMarginPool,
-  repayToMarginPool,
   toUnits,
   fromUnits,
   getCoinDecimals,
+  createMarginManagerWithInitializer,
+  shareMarginManager,
   type NetworkEnv,
   type DeepBookConfig,
 } from "@/lib/deepbook-v3";
+import {
+  createDeepBookClient,
+  queryMarginManagerState,
+  type MarginManagerMap,
+  type DeepBookExtendedClient,
+} from "@/lib/deepbook-client";
 
 // LocalStorage key for storing margin manager IDs (includes network)
 const getMarginManagersKey = (network: NetworkEnv) =>
@@ -119,6 +118,17 @@ export default function MarginTradingPage() {
   const [repayAmount, setRepayAmount] = useState("");
   const [repayIsBase, setRepayIsBase] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // DeepBook SDK client (recreated when margin managers change)
+  const [deepBookClient, setDeepBookClient] =
+    useState<DeepBookExtendedClient | null>(null);
+  const [marginManagerState, setMarginManagerState] = useState<{
+    baseDeposited: bigint;
+    quoteDeposited: bigint;
+    deepDeposited: bigint;
+    baseBorrowed: bigint;
+    quoteBorrowed: bigint;
+  } | null>(null);
 
   const addLog = useCallback((message: string) => {
     console.log("[MarginTrading]", message);
@@ -224,6 +234,61 @@ export default function MarginTradingPage() {
 
     loadMarginManagers();
   }, [account?.address, suiClient, addLog, selectedManager, network]);
+
+  // Create/recreate DeepBook client when margin managers or account changes
+  useEffect(() => {
+    if (!account?.address) {
+      setDeepBookClient(null);
+      return;
+    }
+
+    // Convert StoredMarginManager[] to MarginManagerMap
+    const marginManagerMap: MarginManagerMap = {};
+    marginManagers.forEach((mgr) => {
+      const key = `MGR_${mgr.id.slice(0, 8)}`;
+      marginManagerMap[key] = {
+        address: mgr.id,
+        poolKey: mgr.poolKey,
+      };
+    });
+
+    // Create extended client with margin managers
+    // This creates its own SuiClient instance with $extend support
+    const client = createDeepBookClient({
+      env: network,
+      address: account.address,
+      marginManagers: marginManagerMap,
+    });
+
+    setDeepBookClient(client);
+    addLog(
+      `DeepBook client initialized with ${marginManagers.length} margin manager(s)`,
+    );
+  }, [account?.address, marginManagers, network, addLog]);
+
+  // Query margin manager state when selected manager changes
+  useEffect(() => {
+    if (!selectedManager || !suiClient) {
+      setMarginManagerState(null);
+      return;
+    }
+
+    const queryState = async () => {
+      const state = await queryMarginManagerState({
+        client: suiClient,
+        marginManagerId: selectedManager,
+      });
+
+      if (state) {
+        setMarginManagerState(state);
+        addLog(
+          `[INFO] Manager state: ${fromUnits(state.baseDeposited, 9)} base, ${fromUnits(state.quoteDeposited, 6)} quote deposited`,
+        );
+      }
+    };
+
+    queryState();
+  }, [selectedManager, suiClient, addLog]);
 
   // Save margin manager to storage
   const saveMarginManager = useCallback(
@@ -407,16 +472,10 @@ export default function MarginTradingPage() {
 
   // Deposit collateral
   const handleDeposit = useCallback(async () => {
-    console.log("[MarginTrading] handleDeposit called");
-    console.log("[MarginTrading] State:", {
-      account: !!account,
-      selectedManager,
-      selectedPool,
-      poolInfo: !!poolInfo,
-    });
-
-    if (!account) {
-      addLog("[ERROR] Please connect wallet first");
+    if (!account || !deepBookClient) {
+      addLog(
+        "[ERROR] Please connect wallet and wait for client initialization",
+      );
       return;
     }
 
@@ -438,100 +497,91 @@ export default function MarginTradingPage() {
 
     const coinSymbol =
       depositCoinType === "base" ? poolInfo.baseCoin : poolInfo.quoteCoin;
-    const decimals = getCoinDecimals(CONFIG, coinSymbol);
-    const amountUnits = toUnits(amount, decimals);
 
     addLog(`Depositing ${amount} ${coinSymbol} to margin manager...`);
-    console.log("[MarginTrading] Deposit params:", {
-      coinSymbol,
-      amount,
-      amountUnits: amountUnits.toString(),
-      marginManagerId: selectedManager,
-      coinType: depositCoinType,
-    });
 
     const tx = new Transaction();
     tx.setSender(account.address);
     tx.setGasBudget(100_000_000);
 
     try {
-      const coinType = CONFIG.coins[coinSymbol].type;
-      const isSUI = coinType === "0x2::sui::SUI";
+      // Find the manager key for this manager ID
+      const managerKey = `MGR_${selectedManager.slice(0, 8)}`;
 
-      let depositCoinArg;
+      // Get coin type and decimals
+      const poolInfo = CONFIG.pools[selectedPool];
+      if (!poolInfo) throw new Error("Pool info not found");
 
-      if (isSUI) {
-        // For SUI, split from gas coin (much more reliable than coinWithBalance)
-        console.log("[MarginTrading] Splitting SUI from gas coin");
-        [depositCoinArg] = tx.splitCoins(tx.gas, [tx.pure.u64(amountUnits)]);
+      let coinType: string;
+      let coinDecimals: number;
+
+      if (depositCoinType === "base") {
+        const baseCoin = CONFIG.coins[poolInfo.baseCoin];
+        coinType = baseCoin.type;
+        coinDecimals = baseCoin.scalar;
+      } else if (coinSymbol === "DEEP") {
+        const deepCoin = CONFIG.coins["DEEP"];
+        coinType = deepCoin.type;
+        coinDecimals = deepCoin.scalar;
       } else {
-        // For other coins, fetch coins and merge/split
-        console.log("[MarginTrading] Fetching coins of type:", coinType);
-        const coins = await suiClient.getCoins({
+        const quoteCoin = CONFIG.coins[poolInfo.quoteCoin];
+        coinType = quoteCoin.type;
+        coinDecimals = quoteCoin.scalar;
+      }
+
+      // Convert amount to base units
+      const amountInBaseUnits = BigInt(Math.floor(amount * coinDecimals));
+
+      // Manually select coins - SDK's auto selection needs getBalance() which SuiGrpcClient doesn't have
+      let coinArg;
+
+      if (coinType.includes("::sui::SUI")) {
+        // For SUI, split from gas
+        coinArg = tx.splitCoins(tx.gas, [amountInBaseUnits]);
+      } else {
+        // For other coins, query user's coins and merge them
+        const userCoins = await suiClient.getCoins({
           owner: account.address,
-          coinType: coinType,
+          coinType,
         });
 
-        if (coins.data.length === 0) {
-          addLog(`[ERROR] No ${coinSymbol} coins found in wallet`);
-          return;
+        if (!userCoins.data.length) {
+          throw new Error(`No ${coinSymbol} coins found in wallet`);
         }
 
-        // Sum available balance
-        const totalBalance = coins.data.reduce(
-          (sum, c) => sum + BigInt(c.balance),
-          BigInt(0),
-        );
-        if (totalBalance < amountUnits) {
-          addLog(
-            `[ERROR] Insufficient ${coinSymbol} balance: ${fromUnits(totalBalance, decimals).toFixed(4)} < ${amount}`,
+        // Create coin references and merge if needed
+        const [firstCoin, ...otherCoins] = userCoins.data;
+        const primaryCoin = tx.object(firstCoin.coinObjectId);
+
+        if (otherCoins.length > 0) {
+          tx.mergeCoins(
+            primaryCoin,
+            otherCoins.map((c) => tx.object(c.coinObjectId)),
           );
-          return;
         }
 
-        // Use first coin and merge others if needed
-        const primaryCoinId = coins.data[0].coinObjectId;
-
-        if (coins.data.length > 1) {
-          // Merge all coins into the first one
-          const otherCoins = coins.data
-            .slice(1)
-            .map((c) => tx.object(c.coinObjectId));
-          tx.mergeCoins(tx.object(primaryCoinId), otherCoins);
-        }
-
-        // Split the exact amount needed
-        [depositCoinArg] = tx.splitCoins(tx.object(primaryCoinId), [
-          tx.pure.u64(amountUnits),
-        ]);
+        // Split the required amount
+        coinArg = tx.splitCoins(primaryCoin, [amountInBaseUnits]);
       }
 
-      // Get price info objects
-      const baseCoin = CONFIG.coins[poolInfo.baseCoin];
-      const quoteCoin = CONFIG.coins[poolInfo.quoteCoin];
-      const basePriceInfo = baseCoin.priceInfoObjectId;
-      const quotePriceInfo = quoteCoin.priceInfoObjectId;
-
-      if (!basePriceInfo || !quotePriceInfo) {
-        addLog("[ERROR] Price info objects not available for margin trading");
-        return;
+      // Use SDK method based on coin type - pass coin TransactionArgument
+      if (depositCoinType === "base") {
+        deepBookClient.deepbook.marginManager.depositBase({
+          managerKey,
+          coin: coinArg,
+        })(tx);
+      } else if (coinSymbol === "DEEP") {
+        deepBookClient.deepbook.marginManager.depositDeep({
+          managerKey,
+          coin: coinArg,
+        })(tx);
+      } else {
+        deepBookClient.deepbook.marginManager.depositQuote({
+          managerKey,
+          coin: coinArg,
+        })(tx);
       }
 
-      // Call deposit directly on transaction
-      tx.moveCall({
-        target: `${CONFIG.marginPackageId}::margin_manager::deposit`,
-        arguments: [
-          tx.object(selectedManager),
-          tx.object(CONFIG.marginRegistryId),
-          tx.object(basePriceInfo),
-          tx.object(quotePriceInfo),
-          depositCoinArg,
-          tx.object("0x6"), // Clock
-        ],
-        typeArguments: [baseCoin.type, quoteCoin.type, coinType],
-      });
-
-      console.log("[MarginTrading] Executing deposit transaction...");
       signAndExecute(
         { transaction: tx as any },
         {
@@ -539,6 +589,14 @@ export default function MarginTradingPage() {
             addLog(`[OK] Deposited ${amount} ${coinSymbol}!`);
             addLog(`TX: ${result.digest.slice(0, 20)}...`);
             setLastTx(result.digest);
+
+            // Refresh margin manager state
+            queryMarginManagerState({
+              client: suiClient,
+              marginManagerId: selectedManager,
+            }).then((state) => {
+              if (state) setMarginManagerState(state);
+            });
           },
           onError: (error) => {
             addLog(`[ERROR] Deposit failed: ${error.message}`);
@@ -552,6 +610,7 @@ export default function MarginTradingPage() {
     }
   }, [
     account,
+    deepBookClient,
     selectedManager,
     selectedPool,
     poolInfo,
@@ -564,16 +623,10 @@ export default function MarginTradingPage() {
 
   // Withdraw collateral
   const handleWithdraw = useCallback(async () => {
-    console.log("[MarginTrading] handleWithdraw called");
-    console.log("[MarginTrading] State:", {
-      account: !!account,
-      selectedManager,
-      selectedPool,
-      poolInfo: !!poolInfo,
-    });
-
-    if (!account) {
-      addLog("[ERROR] Please connect wallet first");
+    if (!account || !deepBookClient) {
+      addLog(
+        "[ERROR] Please connect wallet and wait for client initialization",
+      );
       return;
     }
 
@@ -595,36 +648,50 @@ export default function MarginTradingPage() {
 
     const coinSymbol =
       withdrawCoinType === "base" ? poolInfo.baseCoin : poolInfo.quoteCoin;
-    const decimals = getCoinDecimals(CONFIG, coinSymbol);
-    const amountUnits = toUnits(amount, decimals);
 
     addLog(`Withdrawing ${amount} ${coinSymbol} from margin manager...`);
-    console.log("[MarginTrading] Withdraw params:", {
-      coinSymbol,
-      amount,
-      amountUnits: amountUnits.toString(),
-      marginManagerId: selectedManager,
-      coinType: withdrawCoinType,
-    });
 
     const tx = new Transaction();
     tx.setSender(account.address);
     tx.setGasBudget(100_000_000);
 
     try {
-      const withdrawnCoin = withdrawMargin({
-        tx,
-        config: CONFIG,
-        poolKey: selectedPool,
-        marginManagerId: selectedManager,
-        coinType: withdrawCoinType,
-        amount: amountUnits,
-      });
+      const managerKey = `MGR_${selectedManager.slice(0, 8)}`;
 
-      // Transfer withdrawn coin to user
-      tx.transferObjects([withdrawnCoin], account.address);
+      // Get coin decimals
+      const poolInfo = CONFIG.pools[selectedPool];
+      if (!poolInfo) throw new Error("Pool info not found");
 
-      console.log("[MarginTrading] Executing withdraw transaction...");
+      let coinDecimals: number;
+      if (withdrawCoinType === "base") {
+        coinDecimals = CONFIG.coins[poolInfo.baseCoin].scalar;
+      } else if (coinSymbol === "DEEP") {
+        coinDecimals = CONFIG.coins["DEEP"].scalar;
+      } else {
+        coinDecimals = CONFIG.coins[poolInfo.quoteCoin].scalar;
+      }
+
+      const amountInBaseUnits = Math.floor(amount * coinDecimals);
+
+      // Withdraw takes coins from margin manager and returns to wallet
+      // Use positional arguments (managerKey, amount as number)
+      if (withdrawCoinType === "base") {
+        deepBookClient.deepbook.marginManager.withdrawBase(
+          managerKey,
+          amountInBaseUnits,
+        )(tx);
+      } else if (coinSymbol === "DEEP") {
+        deepBookClient.deepbook.marginManager.withdrawDeep(
+          managerKey,
+          amountInBaseUnits,
+        )(tx);
+      } else {
+        deepBookClient.deepbook.marginManager.withdrawQuote(
+          managerKey,
+          amountInBaseUnits,
+        )(tx);
+      }
+
       signAndExecute(
         { transaction: tx as any },
         {
@@ -632,10 +699,18 @@ export default function MarginTradingPage() {
             addLog(`[OK] Withdrew ${amount} ${coinSymbol}!`);
             addLog(`TX: ${result.digest.slice(0, 20)}...`);
             setLastTx(result.digest);
+
+            // Refresh state
+            queryMarginManagerState({
+              client: suiClient,
+              marginManagerId: selectedManager,
+            }).then((state) => {
+              if (state) setMarginManagerState(state);
+            });
           },
           onError: (error) => {
             addLog(`[ERROR] Withdraw failed: ${error.message}`);
-            if (error.message.includes("WithdrawRiskRatioExceeded")) {
+            if (error.message.includes("RiskRatio")) {
               addLog(`Tip: Cannot withdraw - would exceed risk ratio`);
             }
             console.error("Withdraw error:", error);
@@ -648,6 +723,7 @@ export default function MarginTradingPage() {
     }
   }, [
     account,
+    deepBookClient,
     selectedManager,
     selectedPool,
     poolInfo,
@@ -655,20 +731,15 @@ export default function MarginTradingPage() {
     withdrawCoinType,
     signAndExecute,
     addLog,
+    suiClient,
   ]);
 
   // Borrow from margin pool
   const handleBorrow = useCallback(async () => {
-    console.log("[MarginTrading] handleBorrow called");
-    console.log("[MarginTrading] State:", {
-      account: !!account,
-      selectedManager,
-      selectedPool,
-      poolInfo: !!poolInfo,
-    });
-
-    if (!account) {
-      addLog("[ERROR] Please connect wallet first");
+    if (!account || !deepBookClient) {
+      addLog(
+        "[ERROR] Please connect wallet and wait for client initialization",
+      );
       return;
     }
 
@@ -689,33 +760,45 @@ export default function MarginTradingPage() {
     }
 
     const coinSymbol = borrowIsBase ? poolInfo.baseCoin : poolInfo.quoteCoin;
-    const decimals = getCoinDecimals(CONFIG, coinSymbol);
-    const amountUnits = toUnits(amount, decimals);
-
     addLog(`Borrowing ${amount} ${coinSymbol} from margin pool...`);
-    console.log("[MarginTrading] Borrow params:", {
-      coinSymbol,
-      amount,
-      amountUnits: amountUnits.toString(),
-      marginManagerId: selectedManager,
-      isBase: borrowIsBase,
-    });
 
     const tx = new Transaction();
     tx.setSender(account.address);
     tx.setGasBudget(100_000_000);
 
     try {
-      borrowFromMarginPool({
-        tx,
-        config: CONFIG,
-        poolKey: selectedPool,
-        marginManagerId: selectedManager,
-        isBase: borrowIsBase,
-        amount: amountUnits,
-      });
+      const managerKey = `MGR_${selectedManager.slice(0, 8)}`;
 
-      console.log("[MarginTrading] Executing borrow transaction...");
+      // Get pool key
+      const poolKey = `POOL_${selectedPool}`;
+
+      // Get coin decimals
+      const poolInfo = CONFIG.pools[selectedPool];
+      if (!poolInfo) throw new Error("Pool info not found");
+
+      let coinDecimals: number;
+      if (borrowIsBase) {
+        coinDecimals = CONFIG.coins[poolInfo.baseCoin].scalar;
+      } else {
+        coinDecimals = CONFIG.coins[poolInfo.quoteCoin].scalar;
+      }
+
+      const amountInBaseUnits = Math.floor(amount * coinDecimals);
+
+      // Borrow takes from pool and deposits into margin manager
+      // Use positional arguments (managerKey, amount) - pool determined from manager config
+      if (borrowIsBase) {
+        deepBookClient.deepbook.marginManager.borrowBase(
+          managerKey,
+          amountInBaseUnits,
+        )(tx);
+      } else {
+        deepBookClient.deepbook.marginManager.borrowQuote(
+          managerKey,
+          amountInBaseUnits,
+        )(tx);
+      }
+
       signAndExecute(
         { transaction: tx as any },
         {
@@ -724,10 +807,18 @@ export default function MarginTradingPage() {
             addLog(`TX: ${result.digest.slice(0, 20)}...`);
             addLog(`[WARN] Remember to repay your loan with interest`);
             setLastTx(result.digest);
+
+            // Refresh state
+            queryMarginManagerState({
+              client: suiClient,
+              marginManagerId: selectedManager,
+            }).then((state) => {
+              if (state) setMarginManagerState(state);
+            });
           },
           onError: (error) => {
             addLog(`[ERROR] Borrow failed: ${error.message}`);
-            if (error.message.includes("BorrowRiskRatioExceeded")) {
+            if (error.message.includes("RiskRatio")) {
               addLog(`Tip: Not enough collateral for this borrow`);
             }
             console.error("Borrow error:", error);
@@ -740,6 +831,7 @@ export default function MarginTradingPage() {
     }
   }, [
     account,
+    deepBookClient,
     selectedManager,
     selectedPool,
     poolInfo,
@@ -747,20 +839,15 @@ export default function MarginTradingPage() {
     borrowIsBase,
     signAndExecute,
     addLog,
+    suiClient,
   ]);
 
   // Repay loan
   const handleRepay = useCallback(async () => {
-    console.log("[MarginTrading] handleRepay called");
-    console.log("[MarginTrading] State:", {
-      account: !!account,
-      selectedManager,
-      selectedPool,
-      poolInfo: !!poolInfo,
-    });
-
-    if (!account) {
-      addLog("[ERROR] Please connect wallet first");
+    if (!account || !deepBookClient) {
+      addLog(
+        "[ERROR] Please connect wallet and wait for client initialization",
+      );
       return;
     }
 
@@ -782,40 +869,69 @@ export default function MarginTradingPage() {
       return;
     }
 
-    const decimals = getCoinDecimals(CONFIG, coinSymbol);
-    const amountUnits = amount ? toUnits(amount, decimals) : undefined;
-
     addLog(`Repaying ${amount || "all"} ${coinSymbol} to margin pool...`);
-    console.log("[MarginTrading] Repay params:", {
-      coinSymbol,
-      amount,
-      amountUnits: amountUnits?.toString(),
-      marginManagerId: selectedManager,
-      isBase: repayIsBase,
-    });
 
     const tx = new Transaction();
     tx.setSender(account.address);
     tx.setGasBudget(100_000_000);
 
     try {
-      repayToMarginPool({
-        tx,
-        config: CONFIG,
-        poolKey: selectedPool,
-        marginManagerId: selectedManager,
-        isBase: repayIsBase,
-        amount: amountUnits,
-      });
+      const managerKey = `MGR_${selectedManager.slice(0, 8)}`;
 
-      console.log("[MarginTrading] Executing repay transaction...");
+      // Get pool key
+      const poolKey = `POOL_${selectedPool}`;
+
+      // Get coin type and decimals
+      const poolInfo = CONFIG.pools[selectedPool];
+      if (!poolInfo) throw new Error("Pool info not found");
+
+      let coinType: string;
+      let coinDecimals: number;
+      if (repayIsBase) {
+        const baseCoin = CONFIG.coins[poolInfo.baseCoin];
+        coinType = baseCoin.type;
+        coinDecimals = baseCoin.scalar;
+      } else {
+        const quoteCoin = CONFIG.coins[poolInfo.quoteCoin];
+        coinType = quoteCoin.type;
+        coinDecimals = quoteCoin.scalar;
+      }
+
+      // If amount specified, convert to base units
+      let amountInBaseUnits: number | undefined;
+      if (amount !== undefined) {
+        amountInBaseUnits = Math.floor(amount * coinDecimals);
+      }
+
+      // Repay from margin manager balance (not wallet)
+      // Pass managerKey and optional amount. If no amount, repays all debt
+      if (repayIsBase) {
+        deepBookClient.deepbook.marginManager.repayBase(
+          managerKey,
+          amountInBaseUnits,
+        )(tx);
+      } else {
+        deepBookClient.deepbook.marginManager.repayQuote(
+          managerKey,
+          amountInBaseUnits,
+        )(tx);
+      }
+
       signAndExecute(
         { transaction: tx as any },
         {
           onSuccess: (result) => {
-            addLog(`[OK] Repaid ${amount || "all"} ${coinSymbol}!`);
+            addLog(`[OK] Repaid ${amount} ${coinSymbol}!`);
             addLog(`TX: ${result.digest.slice(0, 20)}...`);
             setLastTx(result.digest);
+
+            // Refresh state
+            queryMarginManagerState({
+              client: suiClient,
+              marginManagerId: selectedManager,
+            }).then((state) => {
+              if (state) setMarginManagerState(state);
+            });
           },
           onError: (error) => {
             addLog(`[ERROR] Repay failed: ${error.message}`);
@@ -829,6 +945,7 @@ export default function MarginTradingPage() {
     }
   }, [
     account,
+    deepBookClient,
     selectedManager,
     selectedPool,
     poolInfo,
@@ -836,6 +953,7 @@ export default function MarginTradingPage() {
     repayIsBase,
     signAndExecute,
     addLog,
+    suiClient,
   ]);
 
   const getExplorerUrl = (network: string, digest: string) => {

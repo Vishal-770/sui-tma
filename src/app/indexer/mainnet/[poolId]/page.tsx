@@ -10,7 +10,7 @@ import { OrderUpdates } from "@/components/OrderUpdates";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Loader } from "lucide-react";
 import Link from "next/link";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -228,9 +228,10 @@ export default function MainnetPoolDetailsPage() {
 
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-6">
-        <div className="flex items-center justify-center py-8">
-          Loading pool details...
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="flex items-center justify-center">
+          <Loader className="h-6 w-6 animate-spin" />
+          <span className="ml-2">Loading pool details...</span>
         </div>
       </div>
     );
@@ -292,7 +293,8 @@ export default function MainnetPoolDetailsPage() {
         <CardContent>
           {isLoadingChart ? (
             <div className="flex items-center justify-center h-[400px]">
-              Loading chart data...
+              <Loader className="h-6 w-6 animate-spin" />
+              <span className="ml-2">Loading chart data...</span>
             </div>
           ) : ohlcvData && ohlcvData.length > 0 ? (
             <CandleChart candles={ohlcvData} height={400} />

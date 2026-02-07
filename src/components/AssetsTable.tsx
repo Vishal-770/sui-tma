@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Activity, ExternalLink, CheckCircle2, XCircle } from "lucide-react";
+import { Activity, ExternalLink, CheckCircle2, XCircle, Loader } from "lucide-react";
 import axios from "axios";
 import { useMemo } from "react";
 import {
@@ -80,9 +80,11 @@ export function AssetsTable({ network, searchQuery = "" }: AssetsTableProps) {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-8">
-        <Activity className="h-6 w-6 animate-spin" />
-        <span className="ml-2">Loading assets...</span>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="flex items-center justify-center">
+          <Loader className="h-6 w-6 animate-spin" />
+          <span className="ml-2">Loading assets...</span>
+        </div>
       </div>
     );
   }

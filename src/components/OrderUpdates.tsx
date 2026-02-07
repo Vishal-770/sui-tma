@@ -15,7 +15,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { RefreshCw, Loader } from "lucide-react";
 
 interface OrderUpdate {
   order_id: string;
@@ -32,12 +32,6 @@ interface OrderUpdate {
 interface OrderUpdatesProps {
   poolName: string;
   network: "testnet" | "mainnet";
-}
-
-interface PageData {
-  orders: OrderUpdate[];
-  oldestTimestamp: number;
-  newestTimestamp: number;
 }
 
 async function fetchOrderUpdates(
@@ -95,9 +89,7 @@ export function OrderUpdates({ poolName, network }: OrderUpdatesProps) {
   const [statusFilter, setStatusFilter] = useState<
     "Placed" | "Canceled" | undefined
   >();
-  const [currentPage, setCurrentPage] = useState(0);
-  const [pagesData, setPagesData] = useState<PageData[]>([]);
-  const [currentEndTime, setCurrentEndTime] = useState<number | undefined>();
+
   const limit = 10;
 
   const {
@@ -105,114 +97,29 @@ export function OrderUpdates({ poolName, network }: OrderUpdatesProps) {
     isLoading,
     refetch,
   } = useQuery({
-    queryKey: [
-      "orderUpdates",
-      network,
-      poolName,
-      statusFilter,
-      currentPage,
-      currentEndTime,
-    ],
+    queryKey: ["orderUpdates", network, poolName, statusFilter],
     queryFn: async () => {
-      // Check if we have cached data for this page
-      if (pagesData[currentPage]) {
-        return pagesData[currentPage].orders;
-      }
-
-      // Fetch new data
       const fetchedOrders = await fetchOrderUpdates(
         network,
         poolName,
         limit,
         undefined,
-        currentEndTime,
+        undefined,
         statusFilter,
       );
 
-      if (fetchedOrders.length > 0) {
-        const timestamps = fetchedOrders.map((o) => o.timestamp);
-        const pageData: PageData = {
-          orders: fetchedOrders,
-          oldestTimestamp: Math.min(...timestamps),
-          newestTimestamp: Math.max(...timestamps),
-        };
-
-        // Cache the page data
-        setPagesData((prev) => {
-          const newPages = [...prev];
-          newPages[currentPage] = pageData;
-          return newPages;
-        });
-
-        return fetchedOrders;
-      }
-
-      return [];
+      return fetchedOrders;
     },
     refetchInterval: 10000, // Refresh every 10 seconds
   });
 
-  const handleLoadMore = useCallback(() => {
-    if (!orders || orders.length === 0) return;
-
-    const currentPageData = pagesData[currentPage];
-    if (!currentPageData && orders.length > 0) {
-      // Save current page data if not already saved
-      const timestamps = orders.map((o) => o.timestamp);
-      const pageData: PageData = {
-        orders,
-        oldestTimestamp: Math.min(...timestamps),
-        newestTimestamp: Math.max(...timestamps),
-      };
-      setPagesData((prev) => {
-        const newPages = [...prev];
-        newPages[currentPage] = pageData;
-        return newPages;
-      });
-      setCurrentEndTime(Math.min(...timestamps));
-    } else if (currentPageData) {
-      setCurrentEndTime(currentPageData.oldestTimestamp);
-    }
-
-    setCurrentPage((prev) => prev + 1);
-  }, [orders, pagesData, currentPage]);
-
-  const handleLoadNewer = useCallback(() => {
-    if (currentPage === 0) return;
-
-    const prevPage = currentPage - 1;
-    const prevPageData = pagesData[prevPage];
-
-    if (prevPageData) {
-      // Use cached end time from previous page
-      setCurrentEndTime(
-        prevPage === 0 ? undefined : pagesData[prevPage - 1]?.oldestTimestamp,
-      );
-    } else {
-      setCurrentEndTime(undefined);
-    }
-
-    setCurrentPage(prevPage);
-  }, [currentPage, pagesData]);
-
   const handleRefresh = useCallback(() => {
-    // Reset to first page
-    setCurrentPage(0);
-    setPagesData([]);
-    setCurrentEndTime(undefined);
     refetch();
   }, [refetch]);
 
   const handleStatusChange = useCallback((newStatus: string) => {
     setStatusFilter(newStatus === "all" ? undefined : (newStatus as any));
-    // Reset pagination when changing filter
-    setCurrentPage(0);
-    setPagesData([]);
-    setCurrentEndTime(undefined);
   }, []);
-
-  const hasMore = orders && orders.length === limit;
-  const canGoBack = currentPage > 0;
 
   return (
     <Card>
@@ -246,7 +153,8 @@ export function OrderUpdates({ poolName, network }: OrderUpdatesProps) {
       <CardContent>
         {isLoading && orders === undefined ? (
           <div className="flex items-center justify-center py-8">
-            Loading orders...
+            <Loader className="h-6 w-6 animate-spin" />
+            <span className="ml-2">Loading orders...</span>
           </div>
         ) : orders && orders.length > 0 ? (
           <>
@@ -265,79 +173,57 @@ export function OrderUpdates({ poolName, network }: OrderUpdatesProps) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {orders.map((order, index) => (
-                    <TableRow
-                      key={`${order.order_id}-${order.timestamp}-${index}`}
-                    >
-                      <TableCell className="text-sm">
-                        {formatTimestamp(order.timestamp)}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {order.order_id.slice(0, 8)}...
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            order.type === "BUY" ? "default" : "secondary"
-                          }
+                  {orders.map(
+                    (order, index) => (
+                      console.log(order),
+                      (
+                        <TableRow
+                          key={`${order.order_id}-${order.timestamp}-${index}`}
                         >
-                          {order.type}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            order.status === "Placed"
-                              ? "default"
-                              : "destructive"
-                          }
-                        >
-                          {order.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {formatPrice(order.price)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {formatQuantity(order.original_quantity)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-chart-2">
-                        {formatQuantity(order.filled_quantity)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-muted-foreground">
-                        {formatQuantity(order.remaining_quantity)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                          <TableCell className="text-sm">
+                            {formatTimestamp(order.timestamp)}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {order.order_id.slice(0, 8)}...
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={
+                                order.type === "BUY" ? "default" : "secondary"
+                              }
+                            >
+                              {order.type}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={
+                                order.status === "Placed"
+                                  ? "default"
+                                  : "destructive"
+                              }
+                            >
+                              {order.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {order.price}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {order.original_quantity}
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-chart-2">
+                            {order.filled_quantity}
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-muted-foreground">
+                            {order.remaining_quantity}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    ),
+                  )}
                 </TableBody>
               </Table>
-            </div>
-
-            {/* Pagination Controls */}
-            <div className="flex items-center justify-between mt-4 pt-4 border-t">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleLoadNewer}
-                disabled={!canGoBack || isLoading}
-              >
-                <ChevronLeft className="h-4 w-4 mr-1" />
-                Newer
-              </Button>
-
-              <div className="text-sm text-muted-foreground">
-                Page {currentPage + 1} • {orders.length} orders
-              </div>
-
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleLoadMore}
-                disabled={!hasMore || isLoading}
-              >
-                Older
-                <ChevronRight className="h-4 w-4 ml-1" />
-              </Button>
             </div>
           </>
         ) : (
