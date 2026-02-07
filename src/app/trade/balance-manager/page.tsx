@@ -49,6 +49,7 @@ import {
 import {
   buildCreateBalanceManagerTx,
   buildMintTradeCapTx,
+  buildMintAndAssignTradeCapTx,
   buildWithdrawFromManagerTx,
   BalanceManagerContract,
   createBalanceManagerContract,
@@ -65,9 +66,7 @@ import {
   TrendingUp,
   ArrowDownToLine,
   ArrowUpFromLine,
-  Sparkles,
   Shield,
-  Ticket,
   CheckCircle2,
   AlertCircle,
   Loader2,
@@ -83,6 +82,7 @@ import {
   User,
   LogOut,
   Network,
+  Ticket,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -117,8 +117,10 @@ const COIN_SYMBOL_MAP: Record<string, string> = {
 
 interface TradeCap {
   objectId: string;
-  poolId: string;
-  poolName: string;
+  balanceManagerId: string;
+  owner: string;
+  isOwnedByUser: boolean;
+  isEligible: boolean;
 }
 
 export default function BalanceManagerPage() {
@@ -136,6 +138,10 @@ export default function BalanceManagerPage() {
   const [selectedManagerIndex, setSelectedManagerIndex] = useState(0);
   const balanceManager = balanceManagers[selectedManagerIndex] || null;
   const [tradeCaps, setTradeCaps] = useState<TradeCap[]>([]);
+  const [selectedPool, setSelectedPool] = useState<string>(
+    Object.keys(POOLS)[0],
+  );
+  const [traderAddress, setTraderAddress] = useState("");
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -144,20 +150,11 @@ export default function BalanceManagerPage() {
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
   const [walletBalance, setWalletBalance] = useState<string>("0");
   const [copied, setCopied] = useState(false);
-  const {
-    isAuthenticated: zkLoginAuth,
-    session: zkLoginSession,
-    logout: zkLoginLogout,
-  } = useAuth();
-  const router = useRouter();
 
   // Form states
   const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [selectedCoin, setSelectedCoin] = useState<string>("SUI");
-  const [selectedPool, setSelectedPool] = useState<string>(
-    Object.keys(POOLS)[0],
-  );
 
   // User balances
   const [userBalances, setUserBalances] = useState<Record<string, string>>({});
@@ -260,8 +257,8 @@ export default function BalanceManagerPage() {
         }
       }
 
-      // Fetch Trade Caps
-      const capObjects = await suiClient.getOwnedObjects({
+      // Fetch Trade Caps owned by the user
+      const ownedCapObjects = await suiClient.getOwnedObjects({
         owner: address,
         filter: {
           StructType: `${deepBookConfig.PACKAGE_ID}::balance_manager::TradeCap`,
@@ -269,20 +266,40 @@ export default function BalanceManagerPage() {
         options: {
           showContent: true,
           showType: true,
+          showOwner: true,
         },
       });
 
       const caps: TradeCap[] = [];
-      for (const cap of capObjects.data) {
+      for (const cap of ownedCapObjects.data) {
         if (cap.data?.content?.dataType === "moveObject") {
           const fields = cap.data.content.fields as any;
+          console.log("Full TradeCap object:", cap); // Debug log - entire object
+          console.log("TradeCap fields:", fields); // Debug log - fields only
+
+          // Extract owner address from the owner field
+          let ownerAddress = address; // Default to current user
+          if (
+            cap.data.owner &&
+            typeof cap.data.owner === "object" &&
+            "AddressOwner" in cap.data.owner
+          ) {
+            ownerAddress = cap.data.owner.AddressOwner;
+          }
+
+          const isOwnedByUser = ownerAddress === address;
+
           caps.push({
             objectId: cap.data.objectId,
-            poolId: fields.pool_id || "Unknown",
-            poolName: getPoolNameFromId(fields.pool_id),
+            balanceManagerId:
+              fields.balance_manager_id || fields.id || "Unknown",
+            owner: ownerAddress,
+            isEligible: true, // Assume eligible if not revoked
+            isOwnedByUser: isOwnedByUser,
           });
         }
       }
+
       setTradeCaps(caps);
 
       // Fetch user balances
@@ -343,10 +360,25 @@ export default function BalanceManagerPage() {
 
   // Get pool name from ID
   const getPoolNameFromId = (poolId: string): string => {
+    console.log("🔍 getPoolNameFromId called with:", poolId);
+    console.log("📋 Available POOLS:", Object.keys(POOLS));
+
+    // Normalize the pool ID for comparison
+    const normalizedPoolId = poolId?.toLowerCase()?.trim();
+    console.log("🔄 Normalized poolId:", normalizedPoolId);
+
     for (const [name, info] of Object.entries(POOLS)) {
-      if ((info as any).poolId === poolId) return name;
+      const poolInfoId = (info as any).poolId?.toLowerCase()?.trim();
+      console.log(`🔎 Checking ${name}:`, poolInfoId);
+      if (poolInfoId === normalizedPoolId) {
+        console.log("✅ Found match:", name);
+        return name;
+      }
     }
-    return "Unknown Pool";
+
+    console.log("❌ No match found, returning shortened ID");
+    // If no match found, return a shortened version of the pool ID
+    return `Pool ${poolId.slice(0, 8)}...${poolId.slice(-6)}`;
   };
 
   // Fetch Balance Manager internal balances
@@ -444,90 +476,6 @@ export default function BalanceManagerPage() {
     }
   };
 
-  // Advanced Operations Handlers
-
-  // Generate Proof
-  const handleGenerateProof = async () => {
-    if (!address || !balanceManager) return;
-
-    setActionLoading("generateProof");
-    setError(null);
-    setSuccess(null);
-
-    try {
-      const tx = new Transaction();
-      tx.setSender(account.address);
-      tx.setGasBudget(100_000_000);
-
-      const result = balanceManagerContract.generateProof(
-        balanceManager.objectId,
-      )(tx);
-
-      signAndExecute(
-        {
-          transaction: tx as any,
-        },
-        {
-          onSuccess: async () => {
-            setSuccess("Trade proof generated successfully!");
-            await fetchUserData();
-            setActionLoading(null);
-          },
-          onError: (err) => {
-            console.error("Error generating proof:", err);
-            setError(err.message || "Failed to generate proof");
-            setActionLoading(null);
-          },
-        },
-      );
-    } catch (err) {
-      console.error("Error generating proof:", err);
-      setError(err instanceof Error ? err.message : "Failed to generate proof");
-      setActionLoading(null);
-    }
-  };
-
-  // Check Balance
-  const handleCheckBalance = async () => {
-    if (!address || !balanceManager) return;
-
-    setActionLoading("checkBalance");
-    setError(null);
-    setSuccess(null);
-
-    try {
-      const coinType = getCoinType(selectedCoin);
-      const tx = new Transaction();
-      tx.setSender(account.address);
-
-      const result = balanceManagerContract.checkManagerBalance(
-        balanceManager.objectId,
-        coinType,
-      )(tx);
-
-      signAndExecute(
-        {
-          transaction: tx as any,
-        },
-        {
-          onSuccess: async (result) => {
-            setSuccess(`Balance check completed. Check console for details.`);
-            setActionLoading(null);
-          },
-          onError: (err) => {
-            console.error("Error checking balance:", err);
-            setError(err.message || "Failed to check balance");
-            setActionLoading(null);
-          },
-        },
-      );
-    } catch (err) {
-      console.error("Error checking balance:", err);
-      setError(err instanceof Error ? err.message : "Failed to check balance");
-      setActionLoading(null);
-    }
-  };
-
   // Create Balance Manager
   const handleCreateBalanceManager = async () => {
     if (!account || !account.address) {
@@ -576,18 +524,37 @@ export default function BalanceManagerPage() {
   };
 
   // Mint Trade Cap
-  const handleMintTradeCap = async () => {
-    if (!address || !balanceManager) return;
-
-    setActionLoading("mintCap");
-    setError(null);
-    setSuccess(null);
+  // Mint Trade Cap (optionally assign to trader)
+  const handleMintTradeCap = async (assignToTrader: boolean = false) => {
+    if (!address || !balanceManager || !account) return;
 
     try {
+      setActionLoading(assignToTrader ? "assignCap" : "mintCap");
+      setError(null);
+      setSuccess(null);
+
       const poolInfo = POOLS[selectedPool as keyof typeof POOLS];
       if (!poolInfo) throw new Error("Invalid pool selected");
 
-      const tx = buildMintTradeCapTx(balanceManager.objectId, address);
+      let tx: Transaction;
+
+      if (assignToTrader) {
+        // Validate trader address
+        if (!traderAddress.trim()) {
+          throw new Error("Trader address is required");
+        }
+        if (!traderAddress.startsWith("0x")) {
+          throw new Error("Invalid trader address format");
+        }
+
+        tx = buildMintAndAssignTradeCapTx(
+          balanceManager.objectId,
+          traderAddress.trim(),
+        );
+      } else {
+        tx = buildMintTradeCapTx(balanceManager.objectId, address);
+      }
+
       tx.setSender(account.address);
       tx.setGasBudget(100_000_000); // 0.1 SUI gas budget
 
@@ -597,20 +564,32 @@ export default function BalanceManagerPage() {
         },
         {
           onSuccess: async () => {
-            setSuccess(`Trade Cap minted for ${selectedPool}!`);
+            const action = assignToTrader ? "assigned" : "minted";
+            const target = assignToTrader
+              ? `to ${traderAddress.slice(0, 6)}...${traderAddress.slice(-4)}`
+              : "for you";
+            setSuccess(`Trade Cap ${action} ${target} for ${selectedPool}!`);
+            setTraderAddress(""); // Clear trader address
             await fetchUserData();
             setActionLoading(null);
           },
           onError: (err) => {
-            console.error("Error minting Trade Cap:", err);
-            setError(err.message || "Failed to mint Trade Cap");
+            console.error("Error with Trade Cap:", err);
+            setError(
+              err.message ||
+                `Failed to ${assignToTrader ? "assign" : "mint"} Trade Cap`,
+            );
             setActionLoading(null);
           },
         },
       );
     } catch (err) {
-      console.error("Error minting Trade Cap:", err);
-      setError(err instanceof Error ? err.message : "Failed to mint Trade Cap");
+      console.error("Error with Trade Cap:", err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : `Failed to ${assignToTrader ? "assign" : "mint"} Trade Cap`,
+      );
       setActionLoading(null);
     }
   };
@@ -1520,32 +1499,90 @@ export default function BalanceManagerPage() {
                       Trade Caps
                     </CardTitle>
                     <CardDescription className="text-sm">
-                      Authorize your Balance Manager to trade on specific pools
+                      Manage trading permissions for your Balance Manager. Mint
+                      TradeCaps and assign them to traders, or revoke access
+                      when needed.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-6">
+                    {/* Explanation of TradeCap workflow */}
+                    <div className="p-3 bg-muted border border-border rounded-lg">
+                      <p className="text-sm text-muted-foreground">
+                        <Info className="w-4 h-4 inline mr-1" />
+                        <strong>How TradeCaps work:</strong> Mint a cap for a
+                        pool, then assign it to a trader by transferring the
+                        object. TradeCaps grant trading permissions on DeepBook
+                        V3.
+                      </p>
+                    </div>
+
+                    {/* Note about current limitations */}
+                    <div className="p-3 bg-muted border border-border rounded-lg">
+                      <p className="text-sm text-muted-foreground">
+                        <Info className="w-4 h-4 inline mr-1" />
+                        Currently showing TradeCaps owned by you. TradeCaps
+                        assigned to other traders won't appear here. Track
+                        assignments in your app for full visibility.
+                      </p>
+                    </div>
+
                     {/* Existing Trade Caps */}
                     {tradeCaps.length > 0 && (
                       <div className="space-y-3">
                         <h3 className="text-sm font-medium text-foreground">
-                          Active Trade Caps
+                          Your Trade Caps
                         </h3>
                         <div className="grid gap-3">
                           {tradeCaps.map((cap) => (
                             <div
                               key={cap.objectId}
-                              className="p-4 bg-secondary/50 rounded-lg border border-border hover:border-primary transition-colors flex justify-between items-center"
+                              className="p-4 bg-card rounded-lg border border-border hover:border-primary hover:bg-accent/50 transition-all duration-200 shadow-sm"
                             >
-                              <div>
-                                <p className="text-foreground font-semibold">
-                                  {cap.poolName}
-                                </p>
-                                <p className="text-muted-foreground text-xs font-mono mt-1">
-                                  {cap.objectId.slice(0, 12)}...
-                                  {cap.objectId.slice(-8)}
-                                </p>
+                              <div className="flex justify-between items-start">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <p className="text-foreground font-semibold">
+                                      TradeCap
+                                    </p>
+                                    <Badge
+                                      variant={
+                                        cap.isEligible ? "default" : "secondary"
+                                      }
+                                      className={
+                                        cap.isEligible
+                                          ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                                          : ""
+                                      }
+                                    >
+                                      {cap.isEligible
+                                        ? "Eligible"
+                                        : "Ineligible"}
+                                    </Badge>
+                                    {cap.isOwnedByUser && (
+                                      <Badge
+                                        variant="outline"
+                                        className="text-xs"
+                                      >
+                                        Owned by You
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <p className="text-muted-foreground text-xs font-mono">
+                                    ID: {cap.objectId.slice(0, 12)}...
+                                    {cap.objectId.slice(-8)}
+                                  </p>
+                                  <p className="text-muted-foreground text-xs mt-1">
+                                    Owner: {cap.owner.slice(0, 6)}...
+                                    {cap.owner.slice(-4)}
+                                    {cap.isOwnedByUser && " (You)"}
+                                  </p>
+                                  <p className="text-muted-foreground text-xs mt-1">
+                                    Balance Manager:{" "}
+                                    {cap.balanceManagerId.slice(0, 8)}...
+                                    {cap.balanceManagerId.slice(-6)}
+                                  </p>
+                                </div>
                               </div>
-                              <Badge variant="secondary">Active</Badge>
                             </div>
                           ))}
                         </div>
@@ -1558,117 +1595,67 @@ export default function BalanceManagerPage() {
                         <Plus className="w-5 h-5 text-primary" />
                         Mint New Trade Cap
                       </h3>
-                      <div className="flex flex-col sm:flex-row gap-3">
-                        <Select
-                          value={selectedPool}
-                          onValueChange={setSelectedPool}
-                        >
-                          <SelectTrigger className="flex-1">
-                            <SelectValue placeholder="Select a pool" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {Object.keys(POOLS).map((pool) => (
-                              <SelectItem key={pool} value={pool}>
-                                {pool}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Button
-                          onClick={handleMintTradeCap}
-                          disabled={actionLoading === "mintCap"}
-                          variant="secondary"
-                          className="w-full sm:w-auto"
-                        >
-                          {actionLoading === "mintCap" ? (
-                            <Loader2 className="w-5 h-5 animate-spin" />
-                          ) : (
-                            "Mint Cap"
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
+                      <div className="space-y-3">
+                        <div className="flex flex-col sm:flex-row gap-3">
+                          <Select
+                            value={selectedPool}
+                            onValueChange={setSelectedPool}
+                          >
+                            <SelectTrigger className="flex-1">
+                              <SelectValue placeholder="Select a pool" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {Object.keys(POOLS).map((pool) => (
+                                <SelectItem key={pool} value={pool}>
+                                  {pool}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            onClick={() => handleMintTradeCap(false)}
+                            disabled={actionLoading === "mintCap"}
+                            variant="secondary"
+                            className="w-full sm:w-auto"
+                          >
+                            {actionLoading === "mintCap" ? (
+                              <Loader2 className="w-5 h-5 animate-spin" />
+                            ) : (
+                              "Mint for Me"
+                            )}
+                          </Button>
+                        </div>
 
-              {/* Advanced Operations */}
-              {balanceManager && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Sparkles className="w-5 h-5 text-primary" />
-                      Advanced Operations
-                    </CardTitle>
-                    <CardDescription>
-                      Additional Balance Manager functionality for power users
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-6">
-                    {/* Generate Proof */}
-                    <div className="p-4 rounded-lg border border-border space-y-4">
-                      <h3 className="text-foreground font-semibold flex items-center gap-2">
-                        <Ticket className="w-5 h-5 text-primary" />
-                        Generate Trade Proof
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        Generate a proof for trading operations
-                      </p>
-                      <Button
-                        onClick={() => handleGenerateProof()}
-                        disabled={actionLoading === "generateProof"}
-                        variant="outline"
-                        className="w-full"
-                      >
-                        {actionLoading === "generateProof" ? (
-                          <span className="flex items-center gap-2">
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            Generating...
-                          </span>
-                        ) : (
-                          "Generate Proof"
-                        )}
-                      </Button>
-                    </div>
-
-                    {/* Check Balance */}
-                    <div className="p-4 rounded-lg border border-border space-y-4">
-                      <h3 className="text-foreground font-semibold flex items-center gap-2">
-                        <Wallet className="w-5 h-5 text-primary" />
-                        Check Balance
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        Query the balance of a specific token in your Balance
-                        Manager
-                      </p>
-                      <div className="flex flex-col sm:flex-row gap-3">
-                        <Select
-                          value={selectedCoin}
-                          onValueChange={setSelectedCoin}
-                        >
-                          <SelectTrigger className="flex-1">
-                            <SelectValue placeholder="Select token" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableCoins.map((coin) => (
-                              <SelectItem key={coin} value={coin}>
-                                {coin}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Button
-                          onClick={() => handleCheckBalance()}
-                          disabled={actionLoading === "checkBalance"}
-                          variant="outline"
-                          className="w-full sm:w-auto"
-                        >
-                          {actionLoading === "checkBalance" ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            "Check Balance"
-                          )}
-                        </Button>
+                        {/* Assign to Trader Section */}
+                        <div className="pt-3 border-t border-border">
+                          <h4 className="text-sm font-medium text-foreground mb-2">
+                            Or assign directly to a trader:
+                          </h4>
+                          <div className="flex flex-col sm:flex-row gap-3">
+                            <Input
+                              type="text"
+                              value={traderAddress}
+                              onChange={(e) => setTraderAddress(e.target.value)}
+                              placeholder="Trader address (0x...)"
+                              className="flex-1"
+                            />
+                            <Button
+                              onClick={() => handleMintTradeCap(true)}
+                              disabled={
+                                actionLoading === "assignCap" ||
+                                !traderAddress.trim()
+                              }
+                              variant="default"
+                              className="w-full sm:w-auto"
+                            >
+                              {actionLoading === "assignCap" ? (
+                                <Loader2 className="w-5 h-5 animate-spin" />
+                              ) : (
+                                "Mint & Assign"
+                              )}
+                            </Button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </CardContent>

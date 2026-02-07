@@ -1050,6 +1050,28 @@ export function buildMintTradeCapTx(
 }
 
 /**
+ * Build a mint and assign trade cap transaction (mints cap and transfers to trader)
+ */
+export function buildMintAndAssignTradeCapTx(
+  balanceManagerId: string,
+  traderAddress: string,
+  tx: Transaction = new Transaction(),
+): Transaction {
+  const deepBookConfig =
+    CURRENT_ENV === "mainnet" ? DEEPBOOK_MAINNET : DEEPBOOK_TESTNET;
+
+  const [tradeCap] = tx.moveCall({
+    target: `${deepBookConfig.PACKAGE_ID}::balance_manager::mint_trade_cap`,
+    arguments: [tx.object(balanceManagerId)],
+  });
+
+  // Transfer the created trade cap to the trader
+  tx.transferObjects([tradeCap], traderAddress);
+
+  return tx;
+}
+
+/**
  * Build a deposit to balance manager transaction
  */
 export function buildDepositToManagerTx(
@@ -1420,6 +1442,7 @@ export default {
   createBalanceManagerContract,
   buildCreateBalanceManagerTx,
   buildMintTradeCapTx,
+  buildMintAndAssignTradeCapTx,
   buildDepositToManagerTx,
   buildWithdrawFromManagerTx,
 
