@@ -758,6 +758,255 @@ export function buildCancelOrderTx(
 // ============== Balance Manager Operations ==============
 
 /**
+ * BalanceManagerContract class for managing BalanceManager operations.
+ */
+export class BalanceManagerContract {
+  #config: any;
+
+  /**
+   * @param {any} config Configuration for BalanceManagerContract
+   */
+  constructor(config: any) {
+    this.#config = config;
+  }
+
+  /**
+   * @description Create and share a new BalanceManager
+   * @returns A function that takes a Transaction object
+   */
+  createAndShareBalanceManager = () => (tx: Transaction) => {
+    const manager = tx.moveCall({
+      target: `${this.#config.PACKAGE_ID}::balance_manager::new`,
+    });
+
+    tx.moveCall({
+      target: "0x2::transfer::public_share_object",
+      arguments: [manager],
+      typeArguments: [
+        `${this.#config.PACKAGE_ID}::balance_manager::BalanceManager`,
+      ],
+    });
+  };
+
+  /**
+   * @description Create a new BalanceManager, manually set the owner. Returns the manager.
+   * @returns A function that takes a Transaction object
+   */
+  createBalanceManagerWithOwner =
+    (ownerAddress: string) => (tx: Transaction) => {
+      return tx.moveCall({
+        target: `${this.#config.PACKAGE_ID}::balance_manager::new_with_custom_owner`,
+        arguments: [tx.pure.address(ownerAddress)],
+      });
+    };
+
+  /**
+   * @description Share the BalanceManager
+   * @param {any} manager The BalanceManager to share
+   * @returns A function that takes a Transaction object
+   */
+  shareBalanceManager = (manager: any) => (tx: Transaction) => {
+    tx.moveCall({
+      target: "0x2::transfer::public_share_object",
+      arguments: [manager],
+      typeArguments: [
+        `${this.#config.PACKAGE_ID}::balance_manager::BalanceManager`,
+      ],
+    });
+  };
+
+  /**
+   * @description Deposit funds into the BalanceManager using a pre-split coin object
+   * @param {string} managerId The ID of the BalanceManager
+   * @param {string} coinType The coin type to deposit
+   * @param {any} coinObject The pre-split coin object to deposit
+   * @returns A function that takes a Transaction object
+   */
+  depositIntoManager =
+    (managerId: string, coinType: string, coinObject: any) =>
+    (tx: Transaction) => {
+      tx.moveCall({
+        target: `${this.#config.PACKAGE_ID}::balance_manager::deposit`,
+        arguments: [tx.object(managerId), coinObject],
+        typeArguments: [coinType],
+      });
+    };
+
+  /**
+   * @description Withdraw funds from the BalanceManager
+   * @param {string} managerId The ID of the BalanceManager
+   * @param {string} coinType The coin type to withdraw
+   * @param {number} amountToWithdraw The amount to withdraw
+   * @param {string} recipient The recipient of the withdrawn funds
+   * @returns A function that takes a Transaction object
+   */
+  withdrawFromManager =
+    (
+      managerId: string,
+      coinType: string,
+      amountToWithdraw: number,
+      recipient: string,
+    ) =>
+    (tx: Transaction) => {
+      const withdrawInput = Math.round(
+        amountToWithdraw * this.#config.getCoinScalar(coinType),
+      );
+      const coinObject = tx.moveCall({
+        target: `${this.#config.PACKAGE_ID}::balance_manager::withdraw`,
+        arguments: [tx.object(managerId), tx.pure.u64(withdrawInput)],
+        typeArguments: [coinType],
+      });
+
+      tx.transferObjects([coinObject], recipient);
+    };
+
+  /**
+   * @description Withdraw all funds from the BalanceManager
+   * @param {string} managerId The ID of the BalanceManager
+   * @param {string} coinType The coin type to withdraw
+   * @param {string} recipient The recipient of the withdrawn funds
+   * @returns A function that takes a Transaction object
+   */
+  withdrawAllFromManager =
+    (managerId: string, coinType: string, recipient: string) =>
+    (tx: Transaction) => {
+      const withdrawalCoin = tx.moveCall({
+        target: `${this.#config.PACKAGE_ID}::balance_manager::withdraw_all`,
+        arguments: [tx.object(managerId)],
+        typeArguments: [coinType],
+      });
+
+      tx.transferObjects([withdrawalCoin], recipient);
+    };
+
+  /**
+   * @description Check the balance of the BalanceManager
+   * @param {string} managerId The ID of the BalanceManager
+   * @param {string} coinType The coin type to check the balance of
+   * @returns A function that takes a Transaction object
+   */
+  checkManagerBalance =
+    (managerId: string, coinType: string) => (tx: Transaction) => {
+      tx.moveCall({
+        target: `${this.#config.PACKAGE_ID}::balance_manager::balance`,
+        arguments: [tx.object(managerId)],
+        typeArguments: [coinType],
+      });
+    };
+
+  /**
+   * @description Generate a trade proof for the BalanceManager. Calls the appropriate function based on whether tradeCap is set.
+   * @param {string} managerId The ID of the BalanceManager
+   * @returns A function that takes a Transaction object
+   */
+  generateProof = (managerId: string) => (tx: Transaction) => {
+    return tx.moveCall({
+      target: `${this.#config.PACKAGE_ID}::balance_manager::generate_proof_as_owner`,
+      arguments: [tx.object(managerId)],
+    });
+  };
+
+  /**
+   * @description Generate a trade proof as the owner
+   * @param {string} managerId The ID of the BalanceManager
+   * @returns A function that takes a Transaction object
+   */
+  generateProofAsOwner = (managerId: string) => (tx: Transaction) => {
+    return tx.moveCall({
+      target: `${this.#config.PACKAGE_ID}::balance_manager::generate_proof_as_owner`,
+      arguments: [tx.object(managerId)],
+    });
+  };
+
+  /**
+   * @description Generate a trade proof as a trader
+   * @param {string} managerId The ID of the BalanceManager
+   * @param {string} tradeCapId The ID of the tradeCap
+   * @returns A function that takes a Transaction object
+   */
+  generateProofAsTrader =
+    (managerId: string, tradeCapId: string) => (tx: Transaction) => {
+      return tx.moveCall({
+        target: `${this.#config.PACKAGE_ID}::balance_manager::generate_proof_as_trader`,
+        arguments: [tx.object(managerId), tx.object(tradeCapId)],
+      });
+    };
+
+  /**
+   * @description Mint a TradeCap
+   * @param {string} managerId The ID of the BalanceManager
+   * @returns A function that takes a Transaction object
+   */
+  mintTradeCap = (managerId: string) => (tx: Transaction) => {
+    return tx.moveCall({
+      target: `${this.#config.PACKAGE_ID}::balance_manager::mint_trade_cap`,
+      arguments: [tx.object(managerId)],
+    });
+  };
+
+  /**
+   * @description Check the owner of the BalanceManager
+   * @param {string} managerId The ID of the BalanceManager
+   * @returns A function that takes a Transaction object
+   */
+  checkOwner = (managerId: string) => (tx: Transaction) => {
+    return tx.moveCall({
+      target: `${this.#config.PACKAGE_ID}::balance_manager::owner`,
+      arguments: [tx.object(managerId)],
+    });
+  };
+
+  /**
+   * @description Get the ID of the BalanceManager
+   * @param {string} managerId The ID of the BalanceManager
+   * @returns A function that takes a Transaction object
+   */
+  getId = (managerId: string) => (tx: Transaction) => {
+    return tx.moveCall({
+      target: `${this.#config.PACKAGE_ID}::balance_manager::id`,
+      arguments: [tx.object(managerId)],
+    });
+  };
+
+  /**
+   * @description Get the referral ID from the balance manager for a specific pool
+   * @param {string} managerId The ID of the BalanceManager
+   * @param {string} poolId ID of the pool to get the referral for
+   * @returns A function that takes a Transaction object
+   */
+  getBalanceManagerReferralId =
+    (managerId: string, poolId: string) => (tx: Transaction) => {
+      return tx.moveCall({
+        target: `${this.#config.PACKAGE_ID}::balance_manager::get_balance_manager_referral_id`,
+        arguments: [tx.object(managerId), tx.pure.id(poolId)],
+      });
+    };
+
+  /**
+   * @description Revoke a TradeCap. This also revokes the associated DepositCap and WithdrawCap.
+   * @param {string} managerId The ID of the BalanceManager
+   * @param {string} tradeCapId The ID of the TradeCap to revoke
+   * @returns A function that takes a Transaction object
+   */
+  revokeTradeCap =
+    (managerId: string, tradeCapId: string) => (tx: Transaction) => {
+      tx.moveCall({
+        target: `${this.#config.PACKAGE_ID}::balance_manager::revoke_trade_cap`,
+        arguments: [tx.object(managerId), tx.pure.id(tradeCapId)],
+      });
+    };
+}
+
+/**
+ * Create a BalanceManagerContract instance
+ */
+export function createBalanceManagerContract(config?: any) {
+  const deepBookConfig =
+    config || (CURRENT_ENV === "mainnet" ? DEEPBOOK_MAINNET : DEEPBOOK_TESTNET);
+  return new BalanceManagerContract(deepBookConfig);
+}
+
+/**
  * Build a create balance manager transaction
  */
 export function buildCreateBalanceManagerTx(
@@ -1167,6 +1416,8 @@ export default {
   buildFlashArbitrageTx,
 
   // Balance Manager
+  BalanceManagerContract,
+  createBalanceManagerContract,
   buildCreateBalanceManagerTx,
   buildMintTradeCapTx,
   buildDepositToManagerTx,

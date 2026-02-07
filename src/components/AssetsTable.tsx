@@ -1,7 +1,13 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Activity, ExternalLink, CheckCircle2, XCircle, Loader } from "lucide-react";
+import {
+  Activity,
+  ExternalLink,
+  CheckCircle2,
+  XCircle,
+  Loader,
+} from "lucide-react";
 import axios from "axios";
 import { useMemo } from "react";
 import {

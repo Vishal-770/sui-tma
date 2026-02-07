@@ -49,8 +49,9 @@ import {
 import {
   buildCreateBalanceManagerTx,
   buildMintTradeCapTx,
-  buildDepositToManagerTx,
   buildWithdrawFromManagerTx,
+  BalanceManagerContract,
+  createBalanceManagerContract,
   COIN_TYPES,
   COIN_DECIMALS,
   POOLS,
@@ -167,6 +168,9 @@ export default function BalanceManagerPage() {
   const deepBookConfig =
     CURRENT_ENV === "mainnet" ? DEEPBOOK_MAINNET : DEEPBOOK_TESTNET;
 
+  // Initialize Balance Manager Contract
+  const balanceManagerContract = createBalanceManagerContract(deepBookConfig);
+
   // Fetch user's Balance Manager and Trade Caps
   const fetchUserData = useCallback(async () => {
     if (!address || !suiClient) return;
@@ -175,13 +179,6 @@ export default function BalanceManagerPage() {
     setError(null);
 
     try {
-      console.log("Fetching Balance Manager for address:", address);
-      console.log("Using package ID:", deepBookConfig.PACKAGE_ID);
-      console.log(
-        "Looking for type:",
-        `${deepBookConfig.PACKAGE_ID}::balance_manager::BalanceManager`,
-      );
-
       // Fetch owned objects to find Balance Manager
       const objects = await suiClient.getOwnedObjects({
         owner: address,
@@ -194,16 +191,9 @@ export default function BalanceManagerPage() {
         },
       });
 
-      console.log("Balance Manager query result:", objects);
-      console.log("Found objects count:", objects.data.length);
-
       if (objects.data.length > 0) {
-        console.log("Found", objects.data.length, "Balance Manager(s)");
-
         const managers: BalanceManagerInfo[] = [];
         for (const managerObj of objects.data) {
-          console.log("Balance Manager object:", managerObj);
-
           if (managerObj.data?.content?.dataType === "moveObject") {
             // Parse balance manager data
             const fields = managerObj.data.content.fields as any;
@@ -220,7 +210,6 @@ export default function BalanceManagerPage() {
           }
         }
 
-        console.log("Setting", managers.length, "Balance Managers");
         const previousCount = balanceManagers.length;
         setBalanceManagers(managers);
 
@@ -233,8 +222,6 @@ export default function BalanceManagerPage() {
           setSelectedManagerIndex(0);
         }
       } else {
-        console.log("No Balance Manager found, checking all objects...");
-
         // Fallback: Check all objects to see if Balance Manager exists with different naming
         const allObjects = await suiClient.getOwnedObjects({
           owner: address,
@@ -244,23 +231,10 @@ export default function BalanceManagerPage() {
           },
         });
 
-        console.log("Total objects owned:", allObjects.data.length);
-
-        // Log ALL object types to see what we have
-        console.log(
-          "All object types:",
-          allObjects.data.map((obj: any) => ({
-            objectId: obj.data?.objectId,
-            type: obj.data?.type,
-          })),
-        );
-
         // Look for any object from the DeepBook package
         const deepbookObjects = allObjects.data.filter((obj: any) =>
           obj.data?.type?.includes(deepBookConfig.PACKAGE_ID),
         );
-
-        console.log("DeepBook objects found:", deepbookObjects);
 
         // Check if any of them is a BalanceManager
         const managerInAll = deepbookObjects.find(
@@ -270,7 +244,6 @@ export default function BalanceManagerPage() {
         );
 
         if (managerInAll) {
-          console.log("Found Balance Manager in all objects:", managerInAll);
           const balances = await fetchBalanceManagerBalances(
             managerInAll.data!.objectId,
           );
@@ -283,7 +256,6 @@ export default function BalanceManagerPage() {
           ]);
           setSelectedManagerIndex(0);
         } else {
-          console.log("No Balance Manager found in any objects");
           setBalanceManagers([]);
         }
       }
@@ -330,25 +302,19 @@ export default function BalanceManagerPage() {
     const balances: Record<string, string> = {};
 
     try {
-      console.log("Fetching balances for address:", address);
-      console.log("Current environment:", CURRENT_ENV);
-
       // SUI balance
       const suiBalance = await suiClient.getBalance({
         owner: address,
         coinType: COIN_TYPES.SUI,
       });
-      console.log("SUI balance response:", suiBalance);
       balances["SUI"] = (Number(suiBalance.totalBalance) / 1e9).toFixed(4);
 
       // DEEP balance
       try {
-        console.log("Fetching DEEP with coin type:", COIN_TYPES.DEEP);
         const deepBalance = await suiClient.getBalance({
           owner: address,
           coinType: COIN_TYPES.DEEP,
         });
-        console.log("DEEP balance response:", deepBalance);
         balances["DEEP"] = (Number(deepBalance.totalBalance) / 1e6).toFixed(4);
       } catch (err) {
         console.error("Error fetching DEEP balance:", err);
@@ -359,19 +325,16 @@ export default function BalanceManagerPage() {
       try {
         const usdcType =
           CURRENT_ENV === "mainnet" ? COIN_TYPES.USDC : COIN_TYPES.DBUSDC;
-        console.log("Fetching USDC with coin type:", usdcType);
         const usdcBalance = await suiClient.getBalance({
           owner: address,
           coinType: usdcType,
         });
-        console.log("USDC balance response:", usdcBalance);
         balances["USDC"] = (Number(usdcBalance.totalBalance) / 1e6).toFixed(4);
       } catch (err) {
         console.error("Error fetching USDC balance:", err);
         balances["USDC"] = "0";
       }
 
-      console.log("Final balances:", balances);
       setUserBalances(balances);
     } catch (err) {
       console.error("Error fetching balances:", err);
@@ -410,24 +373,18 @@ export default function BalanceManagerPage() {
       }
 
       const fields = bmObject.data.content.fields as any;
-      console.log("Balance Manager fields:", fields);
 
       // The balances are stored in a Table (dynamic field)
       // We need to query the dynamic fields of the balance manager
       const balancesTableId = fields.balances?.fields?.id?.id;
       if (!balancesTableId) {
-        console.log("No balances table found");
         return [];
       }
-
-      console.log("Balances table ID:", balancesTableId);
 
       // Get dynamic fields of the balances table
       const dynamicFields = await suiClient.getDynamicFields({
         parentId: balancesTableId,
       });
-
-      console.log("Dynamic fields:", dynamicFields);
 
       const balances: { coin: string; amount: string; symbol: string }[] = [];
 
@@ -438,8 +395,6 @@ export default function BalanceManagerPage() {
             parentId: balancesTableId,
             name: (field as any).name,
           });
-
-          console.log("Field object:", fieldObject);
 
           if (
             fieldObject.data?.content &&
@@ -482,11 +437,94 @@ export default function BalanceManagerPage() {
         }
       }
 
-      console.log("Fetched balances:", balances);
       return balances;
     } catch (err) {
       console.error("Error fetching balance manager balances:", err);
       return [];
+    }
+  };
+
+  // Advanced Operations Handlers
+
+  // Generate Proof
+  const handleGenerateProof = async () => {
+    if (!address || !balanceManager) return;
+
+    setActionLoading("generateProof");
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const tx = new Transaction();
+      tx.setSender(account.address);
+      tx.setGasBudget(100_000_000);
+
+      const result = balanceManagerContract.generateProof(
+        balanceManager.objectId,
+      )(tx);
+
+      signAndExecute(
+        {
+          transaction: tx as any,
+        },
+        {
+          onSuccess: async () => {
+            setSuccess("Trade proof generated successfully!");
+            await fetchUserData();
+            setActionLoading(null);
+          },
+          onError: (err) => {
+            console.error("Error generating proof:", err);
+            setError(err.message || "Failed to generate proof");
+            setActionLoading(null);
+          },
+        },
+      );
+    } catch (err) {
+      console.error("Error generating proof:", err);
+      setError(err instanceof Error ? err.message : "Failed to generate proof");
+      setActionLoading(null);
+    }
+  };
+
+  // Check Balance
+  const handleCheckBalance = async () => {
+    if (!address || !balanceManager) return;
+
+    setActionLoading("checkBalance");
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const coinType = getCoinType(selectedCoin);
+      const tx = new Transaction();
+      tx.setSender(account.address);
+
+      const result = balanceManagerContract.checkManagerBalance(
+        balanceManager.objectId,
+        coinType,
+      )(tx);
+
+      signAndExecute(
+        {
+          transaction: tx as any,
+        },
+        {
+          onSuccess: async (result) => {
+            setSuccess(`Balance check completed. Check console for details.`);
+            setActionLoading(null);
+          },
+          onError: (err) => {
+            console.error("Error checking balance:", err);
+            setError(err.message || "Failed to check balance");
+            setActionLoading(null);
+          },
+        },
+      );
+    } catch (err) {
+      console.error("Error checking balance:", err);
+      setError(err instanceof Error ? err.message : "Failed to check balance");
+      setActionLoading(null);
     }
   };
 
@@ -512,7 +550,6 @@ export default function BalanceManagerPage() {
         },
         {
           onSuccess: async (result) => {
-            console.log("Transaction result:", result);
             const accountNumber = balanceManagers.length + 1;
             setSuccess(
               `Balance Manager #${accountNumber} created successfully! Refreshing...`,
@@ -617,21 +654,27 @@ export default function BalanceManagerPage() {
         BigInt(0),
       );
 
-      // For SUI, check if we have enough after reserving gas
-      if (isSUI) {
-        const availableForDeposit = totalBalance - GAS_RESERVE;
-        if (availableForDeposit < amount) {
+      // Check total balance (no gas reserve for any token)
+      // For SUI deposits, we need to account for excluding gas coin from available coins
+      let availableBalance = totalBalance;
+      if (isSUI && coins?.data.length > 0) {
+        const gasCoin = coins.data[0];
+        // If we have multiple SUI coins, subtract gas coin balance from available
+        if (coins.data.length > 1) {
+          availableBalance = totalBalance - BigInt(gasCoin.balance);
+        }
+        // If only one SUI coin, we can't deposit (it's used for gas)
+        else if (coins.data.length === 1) {
           throw new Error(
-            `Insufficient SUI. Need ${(Number(amount) / 1e9).toFixed(4)} SUI + gas reserve (0.2 SUI). Available: ${(Number(totalBalance) / 1e9).toFixed(4)} SUI`,
+            "You need at least 2 SUI coins to deposit SUI (one for gas, one for deposit)",
           );
         }
-      } else {
-        // For non-SUI tokens, just check total balance
-        if (totalBalance < amount) {
-          throw new Error(
-            `Insufficient balance. Need: ${parseFloat(depositAmount).toFixed(4)} ${selectedCoin}`,
-          );
-        }
+      }
+
+      if (availableBalance < amount) {
+        throw new Error(
+          `Insufficient balance. Need: ${parseFloat(depositAmount).toFixed(4)} ${selectedCoin}, Available: ${(Number(availableBalance) / Math.pow(10, decimals)).toFixed(4)} ${selectedCoin}`,
+        );
       }
 
       // Build transaction
@@ -640,72 +683,75 @@ export default function BalanceManagerPage() {
       tx.setGasBudget(100_000_000); // 0.1 SUI gas budget
 
       let coinToDeposit;
+      let gasCoinId: string | null = null;
 
-      if (isSUI) {
-        // For SUI: Carefully select coins to avoid consuming gas coins
-        // Sort coins by balance (smallest first to preserve larger ones for gas)
-        const sortedCoins = [...coins.data].sort(
-          (a, b) => Number(a.balance) - Number(b.balance),
-        );
+      // Get a separate gas coin (works for all tokens including SUI)
+      const suiCoins = await suiClient?.getCoins({
+        owner: address,
+        coinType: COIN_TYPES.SUI,
+      });
 
-        let accumulated = BigInt(0);
-        const coinsToUse: string[] = [];
+      if (!suiCoins?.data.length) {
+        throw new Error("No SUI coins found for gas payment");
+      }
 
-        // Select minimum coins needed for the deposit amount
-        for (const coin of sortedCoins) {
-          if (accumulated >= amount) break;
-          coinsToUse.push(coin.coinObjectId);
-          accumulated += BigInt(coin.balance);
-        }
+      // Use the first SUI coin for gas
+      gasCoinId = suiCoins.data[0].coinObjectId;
+      tx.setGasPayment([
+        {
+          objectId: gasCoinId,
+          version: suiCoins.data[0].version,
+          digest: suiCoins.data[0].digest,
+        },
+      ]);
 
-        if (coinsToUse.length === 0) {
-          throw new Error("Unable to select coins for deposit");
-        }
-
-        // Merge selected coins if more than one
-        if (coinsToUse.length > 1) {
-          tx.mergeCoins(
-            tx.object(coinsToUse[0]),
-            coinsToUse.slice(1).map((id) => tx.object(id)),
-          );
-        }
-
-        // Split the exact amount needed
-        const [split] = tx.splitCoins(tx.object(coinsToUse[0]), [
+      // Handle coin selection and merging (same logic for all tokens)
+      if (coins.data.length === 1) {
+        const [split] = tx.splitCoins(tx.object(coins.data[0].coinObjectId), [
           tx.pure.u64(amount),
         ]);
         coinToDeposit = split;
       } else {
-        // For non-SUI tokens: Safe to merge all coins
-        if (coins.data.length === 1) {
-          const [split] = tx.splitCoins(tx.object(coins.data[0].coinObjectId), [
+        // For SUI deposits, exclude the gas coin from merging to avoid mutable object conflicts
+        let coinsToUse = coins.data;
+        if (isSUI && gasCoinId) {
+          coinsToUse = coins.data.filter(
+            (coin) => coin.coinObjectId !== gasCoinId,
+          );
+          // If filtering removed all coins, fall back to original logic (shouldn't happen)
+          if (coinsToUse.length === 0) {
+            coinsToUse = coins.data;
+          }
+        }
+
+        if (coinsToUse.length === 1) {
+          const [split] = tx.splitCoins(tx.object(coinsToUse[0].coinObjectId), [
             tx.pure.u64(amount),
           ]);
           coinToDeposit = split;
         } else {
-          // Merge all coins then split
+          // Merge all available coins then split
           tx.mergeCoins(
-            tx.object(coins.data[0].coinObjectId),
-            coins.data.slice(1).map((c) => tx.object(c.coinObjectId)),
+            tx.object(coinsToUse[0].coinObjectId),
+            coinsToUse.slice(1).map((c) => tx.object(c.coinObjectId)),
           );
-          const [split] = tx.splitCoins(tx.object(coins.data[0].coinObjectId), [
+          const [split] = tx.splitCoins(tx.object(coinsToUse[0].coinObjectId), [
             tx.pure.u64(amount),
           ]);
           coinToDeposit = split;
         }
       }
 
-      // Use the deposit function
-      const finalTx = buildDepositToManagerTx(
-        balanceManager.objectId,
-        coinType,
-        coinToDeposit,
-        tx,
-      );
+      // Call deposit function directly to avoid multiple mutable references
+      tx.moveCall({
+        target: `${deepBookConfig.PACKAGE_ID}::balance_manager::deposit`,
+        arguments: [tx.object(balanceManager.objectId), coinToDeposit],
+        typeArguments: [coinType],
+      });
 
       signAndExecute(
         {
-          transaction: finalTx as any, // Cast to any to avoid version conflict
+          transaction: tx as any, // Cast to any to avoid version conflict
         },
         {
           onSuccess: async () => {
@@ -1521,6 +1567,89 @@ export default function BalanceManagerPage() {
                             <Loader2 className="w-5 h-5 animate-spin" />
                           ) : (
                             "Mint Cap"
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Advanced Operations */}
+              {balanceManager && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Sparkles className="w-5 h-5 text-primary" />
+                      Advanced Operations
+                    </CardTitle>
+                    <CardDescription>
+                      Additional Balance Manager functionality for power users
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    {/* Generate Proof */}
+                    <div className="p-4 rounded-lg border border-border space-y-4">
+                      <h3 className="text-foreground font-semibold flex items-center gap-2">
+                        <Ticket className="w-5 h-5 text-primary" />
+                        Generate Trade Proof
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        Generate a proof for trading operations
+                      </p>
+                      <Button
+                        onClick={() => handleGenerateProof()}
+                        disabled={actionLoading === "generateProof"}
+                        variant="outline"
+                        className="w-full"
+                      >
+                        {actionLoading === "generateProof" ? (
+                          <span className="flex items-center gap-2">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Generating...
+                          </span>
+                        ) : (
+                          "Generate Proof"
+                        )}
+                      </Button>
+                    </div>
+
+                    {/* Check Balance */}
+                    <div className="p-4 rounded-lg border border-border space-y-4">
+                      <h3 className="text-foreground font-semibold flex items-center gap-2">
+                        <Wallet className="w-5 h-5 text-primary" />
+                        Check Balance
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        Query the balance of a specific token in your Balance
+                        Manager
+                      </p>
+                      <div className="flex flex-col sm:flex-row gap-3">
+                        <Select
+                          value={selectedCoin}
+                          onValueChange={setSelectedCoin}
+                        >
+                          <SelectTrigger className="flex-1">
+                            <SelectValue placeholder="Select token" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {availableCoins.map((coin) => (
+                              <SelectItem key={coin} value={coin}>
+                                {coin}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          onClick={() => handleCheckBalance()}
+                          disabled={actionLoading === "checkBalance"}
+                          variant="outline"
+                          className="w-full sm:w-auto"
+                        >
+                          {actionLoading === "checkBalance" ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            "Check Balance"
                           )}
                         </Button>
                       </div>
