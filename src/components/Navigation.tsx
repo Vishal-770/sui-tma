@@ -28,7 +28,7 @@ import {
   Network,
   Menu,
   X,
-  Sparkles,
+  LogIn,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -36,10 +36,10 @@ import { CURRENT_ENV } from "@/lib/deepbook";
 import Image from "next/image";
 
 const navigation = [
-  { name: "Home", href: "/" },
-  { name: "Trade", href: "/trade" },
-  { name: "Agent", href: "/agent" },
-  { name: "Indexer", href: "/indexer" },
+  { name: "Marlin", href: "/indexer", subtitle: "Pool Explorer" },
+  { name: "Barracuda", href: "/trade", subtitle: "Trading Terminal" },
+  { name: "Manta", href: "/agent", subtitle: "Cross-chain AI" },
+  { name: "Phantom", href: "/intents", subtitle: "Private Intents" },
 ];
 
 function WalletStatus() {
@@ -98,7 +98,7 @@ function WalletStatus() {
               variant="outline"
               className="flex items-center gap-2 hover:bg-accent transition-all duration-200 shadow-sm hover:shadow-md"
             >
-              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+              <div className="w-7 h-7 rounded-full bg-linear-to-br from-primary/20 to-primary/5 flex items-center justify-center">
                 <Wallet className="w-4 h-4 text-primary" />
               </div>
               <div className="hidden sm:flex flex-col items-start gap-0.5">
@@ -178,7 +178,7 @@ function WalletStatus() {
               variant="outline"
               className="flex items-center gap-2 hover:bg-accent transition-all duration-200 shadow-sm hover:shadow-md"
             >
-              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+              <div className="w-7 h-7 rounded-full bg-linear-to-br from-primary/20 to-primary/5 flex items-center justify-center">
                 <Wallet className="w-4 h-4 text-primary" />
               </div>
               <div className="hidden sm:flex flex-col items-start gap-0.5">
@@ -219,7 +219,7 @@ function WalletStatus() {
             <DropdownMenuItem asChild>
               <Link href="/trade/balance-manager" className="cursor-pointer">
                 <Wallet className="w-4 h-4 mr-2" />
-                Balance Manager
+                Vault
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
@@ -256,9 +256,8 @@ function WalletStatus() {
         href="/login"
         className="group relative px-4 py-2 bg-primary hover:bg-primary/90 rounded-lg text-sm text-primary-foreground font-semibold transition-all duration-200 shadow-sm hover:shadow-md overflow-hidden"
       >
-        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
-        <span className="relative flex items-center gap-1.5">
-          <Sparkles className="w-3.5 h-3.5" />
+        <span className="relative flex items-center gap-2">
+          <LogIn className="w-4 h-4" />
           Sign in
         </span>
       </Link>
@@ -271,7 +270,7 @@ export function Navigation() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <nav className="bg-background/80 border-b sticky top-0 z-50 backdrop-blur-md supports-[backdrop-filter]:bg-background/60">
+    <nav className="bg-background/80 border-b sticky top-0 z-50 backdrop-blur-md supports-backdrop-filter:bg-background/60">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 justify-between items-center">
           {/* Logo Section */}
@@ -290,7 +289,7 @@ export function Navigation() {
                 />
               </div>
               <div className="flex flex-col">
-                <span className="hidden sm:inline text-lg font-bold bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">
+                <span className="hidden sm:inline text-lg font-bold bg-linear-to-r from-foreground to-foreground/70 bg-clip-text">
                   Abyss Protocol
                 </span>
                 <span className="hidden sm:inline text-[10px] text-muted-foreground font-medium -mt-1">
@@ -310,13 +309,19 @@ export function Navigation() {
                     key={item.name}
                     href={item.href}
                     className={cn(
-                      "relative px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200",
+                      "group relative px-4 py-2 rounded-lg transition-all duration-200 flex flex-col",
                       isActive
                         ? "text-primary bg-primary/10"
                         : "text-muted-foreground hover:text-foreground hover:bg-accent",
                     )}
+                    title={(item as any).subtitle}
                   >
-                    {item.name}
+                    <span className="text-sm font-semibold">{item.name}</span>
+                    {(item as any).subtitle && (
+                      <span className="text-[10px] opacity-60 leading-none">
+                        {(item as any).subtitle}
+                      </span>
+                    )}
                     {isActive && (
                       <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1/2 h-0.5 bg-primary rounded-full" />
                     )}
@@ -358,13 +363,18 @@ export function Navigation() {
                     href={item.href}
                     onClick={() => setMobileMenuOpen(false)}
                     className={cn(
-                      "px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200",
+                      "px-4 py-3 rounded-lg transition-all duration-200 flex flex-col",
                       isActive
                         ? "text-primary bg-primary/10"
                         : "text-muted-foreground hover:text-foreground hover:bg-accent",
                     )}
                   >
-                    {item.name}
+                    <span className="text-sm font-semibold">{item.name}</span>
+                    {(item as any).subtitle && (
+                      <span className="text-xs opacity-60">
+                        {(item as any).subtitle}
+                      </span>
+                    )}
                   </Link>
                 );
               })}

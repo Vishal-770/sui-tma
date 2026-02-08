@@ -1,13 +1,13 @@
-'use client';
+"use client";
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { useCurrentAccount } from '@mysten/dapp-kit';
-import { useAuth } from '@/contexts/AuthContext';
-import { useNearWallet } from '@/contexts/NearWalletContext';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Badge } from '@/components/ui/badge';
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useCurrentAccount } from "@mysten/dapp-kit";
+import { useAuth } from "@/contexts/AuthContext";
+import { useNearWallet } from "@/contexts/NearWalletContext";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
 import {
   Send,
   Bot,
@@ -21,9 +21,9 @@ import {
   Sparkles,
   Wallet,
   LogOut,
-} from 'lucide-react';
-import Link from 'next/link';
-import type { AgentResponse, MessageType } from '@/lib/near-intents-agent';
+} from "lucide-react";
+import Link from "next/link";
+import type { AgentResponse, MessageType } from "@/lib/near-intents-agent";
 
 // ============== Types ==============
 
@@ -32,7 +32,7 @@ type AgentData = Record<string, any>;
 
 interface ChatMessage {
   id: string;
-  role: 'user' | 'agent';
+  role: "user" | "agent";
   content: string;
   type: MessageType;
   data?: AgentData;
@@ -43,11 +43,11 @@ interface ChatMessage {
 // ============== Session ID ==============
 
 function getSessionId(): string {
-  if (typeof window === 'undefined') return 'server';
-  let sessionId = sessionStorage.getItem('agent-session-id');
+  if (typeof window === "undefined") return "server";
+  let sessionId = sessionStorage.getItem("agent-session-id");
   if (!sessionId) {
     sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    sessionStorage.setItem('agent-session-id', sessionId);
+    sessionStorage.setItem("agent-session-id", sessionId);
   }
   return sessionId;
 }
@@ -56,7 +56,7 @@ function getSessionId(): string {
 
 export default function AgentPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [inputText, setInputText] = useState('');
+  const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -78,37 +78,37 @@ export default function AgentPage() {
   const activeAddress = dappKitAccount?.address || session?.zkLoginAddress;
 
   // When wallet is connected, use 'client-sign' so the agent returns deposit info for us to sign
-  const executionMode = nearConnected ? 'client-sign' : undefined;
+  const executionMode = nearConnected ? "client-sign" : undefined;
 
   // Auto-scroll to bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   // Send welcome message on mount
   useEffect(() => {
     if (messages.length === 0) {
       const welcomeMessage: ChatMessage = {
-        id: 'welcome',
-        role: 'agent',
-        content: `👋 **Welcome to the NEAR Intents AI Agent!**
+        id: "welcome",
+        role: "agent",
+        content: `👋 **Welcome to Manta!**
 
-I'm your cross-chain swap assistant, specializing in the **SUI ecosystem**. I use NEAR Intents to find you the best rates across 15+ blockchains.
+I'm your cross-chain intelligence assistant. I glide across **15+ blockchains** to find you the best swap rates.
 
 **Try saying:**
 • "Swap 100 USDC for SUI"
 • "Show tokens on SUI"
 • "What chains are supported?"
 
-${activeAddress ? `✅ SUI Wallet: \`${activeAddress.slice(0, 8)}...${activeAddress.slice(-6)}\`` : '⚠️ Connect your SUI wallet to receive swapped tokens.'}
-${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : '💡 **Tip:** Click the **Connect NEAR** button to link your NEAR wallet for cross-chain swaps.'}`,
-        type: 'help',
+${activeAddress ? `✅ SUI Wallet: \`${activeAddress.slice(0, 8)}...${activeAddress.slice(-6)}\`` : "⚠️ Connect your SUI wallet to receive swapped tokens."}
+${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : "💡 **Tip:** Click the **Connect NEAR** button to link your NEAR wallet for cross-chain swaps."}`,
+        type: "help",
         timestamp: Date.now(),
         suggestedActions: [
-          'Show tokens on SUI',
-          'Swap 10 USDC for SUI',
-          'What chains are supported?',
-          'Help',
+          "Show tokens on SUI",
+          "Swap 10 USDC for SUI",
+          "What chains are supported?",
+          "Help",
         ],
       };
       setMessages([welcomeMessage]);
@@ -125,40 +125,43 @@ ${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : '💡 **Tip:** Click
   /**
    * Submit the tx hash to the server after wallet signing.
    */
-  const submitTxHash = useCallback(async (txHash: string, depositAddress: string) => {
-    try {
-      const res = await fetch('/api/agent/deposit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ txHash, depositAddress }),
-      });
-      const data = await res.json();
+  const submitTxHash = useCallback(
+    async (txHash: string, depositAddress: string) => {
+      try {
+        const res = await fetch("/api/agent/deposit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ txHash, depositAddress }),
+        });
+        const data = await res.json();
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `txok-${Date.now()}`,
-          role: 'agent',
-          content: `✅ **Deposit Sent!**\n\nTransaction: \`${txHash}\`\n\n🔄 Your swap is now being processed. It typically takes 1-5 minutes.\n\n[View on NEAR Explorer](https://nearblocks.io/txns/${txHash}) · [Track Swap](${data.explorerUrl || '#'})`,
-          type: 'execution',
-          timestamp: Date.now(),
-          suggestedActions: [`status ${depositAddress}`],
-        },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `txsubmiterr-${Date.now()}`,
-          role: 'agent',
-          content: `✅ Transaction sent: \`${txHash}\`\n\n⚠️ Could not notify the relay, but your swap should still process. Track it on [NEAR Explorer](https://nearblocks.io/txns/${txHash}).`,
-          type: 'execution',
-          timestamp: Date.now(),
-          suggestedActions: [`status ${depositAddress}`],
-        },
-      ]);
-    }
-  }, []);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `txok-${Date.now()}`,
+            role: "agent",
+            content: `✅ **Deposit Sent!**\n\nTransaction: \`${txHash}\`\n\n🔄 Your swap is now being processed. It typically takes 1-5 minutes.\n\n[View on NEAR Explorer](https://nearblocks.io/txns/${txHash}) · [Track Swap](${data.explorerUrl || "#"})`,
+            type: "execution",
+            timestamp: Date.now(),
+            suggestedActions: [`status ${depositAddress}`],
+          },
+        ]);
+      } catch {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `txsubmiterr-${Date.now()}`,
+            role: "agent",
+            content: `✅ Transaction sent: \`${txHash}\`\n\n⚠️ Could not notify the relay, but your swap should still process. Track it on [NEAR Explorer](https://nearblocks.io/txns/${txHash}).`,
+            type: "execution",
+            timestamp: Date.now(),
+            suggestedActions: [`status ${depositAddress}`],
+          },
+        ]);
+      }
+    },
+    [],
+  );
 
   /**
    * Use the connected NEAR wallet to sign the deposit transaction.
@@ -172,60 +175,61 @@ ${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : '💡 **Tip:** Click
       // Add a "signing" message
       const signingMsg: ChatMessage = {
         id: `signing-${Date.now()}`,
-        role: 'agent',
-        content: '⏳ Requesting signature from your NEAR wallet...',
-        type: 'text',
+        role: "agent",
+        content: "⏳ Requesting signature from your NEAR wallet...",
+        type: "text",
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, signingMsg]);
 
       try {
         // Build the transaction actions based on the origin asset type
-        const assetId = String(originAsset || '');
-        const rawAmount = String(amount || '0');
+        const assetId = String(originAsset || "");
+        const rawAmount = String(amount || "0");
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let actions: any[];
 
-        if (assetId === 'native:near' || assetId === 'nep141:wrap.near') {
+        if (assetId === "native:near" || assetId === "nep141:wrap.near") {
           // Native NEAR → simple transfer
           actions = [
             {
-              type: 'Transfer',
+              type: "Transfer",
               params: { deposit: rawAmount },
             },
           ];
-        } else if (assetId.startsWith('nep141:')) {
+        } else if (assetId.startsWith("nep141:")) {
           // NEP-141 token → ft_transfer_call on the token contract
-          const tokenContract = assetId.replace('nep141:', '');
+          const tokenContract = assetId.replace("nep141:", "");
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const result: any = await signAndSendTransaction({
             receiverId: tokenContract,
             actions: [
               {
-                type: 'FunctionCall',
+                type: "FunctionCall",
                 params: {
-                  methodName: 'ft_transfer_call',
+                  methodName: "ft_transfer_call",
                   args: {
                     receiver_id: String(depositAddress),
                     amount: rawAmount,
-                    msg: '',
+                    msg: "",
                   },
-                  gas: '100000000000000', // 100 TGas
-                  deposit: '1',           // 1 yoctoNEAR
+                  gas: "100000000000000", // 100 TGas
+                  deposit: "1", // 1 yoctoNEAR
                 },
               },
             ],
           });
 
-          const txHash = result?.transaction?.hash || result?.transaction_outcome?.id || '';
+          const txHash =
+            result?.transaction?.hash || result?.transaction_outcome?.id || "";
           await submitTxHash(txHash, String(depositAddress));
           return;
         } else {
           // Unknown asset type — fallback to transfer
           actions = [
             {
-              type: 'Transfer',
+              type: "Transfer",
               params: { deposit: rawAmount },
             },
           ];
@@ -238,19 +242,20 @@ ${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : '💡 **Tip:** Click
           actions,
         });
 
-        const txHash = result?.transaction?.hash || result?.transaction_outcome?.id || '';
+        const txHash =
+          result?.transaction?.hash || result?.transaction_outcome?.id || "";
         await submitTxHash(txHash, String(depositAddress));
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        const errMsg = err instanceof Error ? err.message : "Unknown error";
         setMessages((prev) => [
           ...prev,
           {
             id: `txerr-${Date.now()}`,
-            role: 'agent',
+            role: "agent",
             content: `❌ **Transaction Failed**\n\n${errMsg}\n\nYou can try again or manually deposit using the address above.`,
-            type: 'error',
+            type: "error",
             timestamp: Date.now(),
-            suggestedActions: ['Try again', 'Help'],
+            suggestedActions: ["Try again", "Help"],
           },
         ]);
       }
@@ -265,20 +270,20 @@ ${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : '💡 **Tip:** Click
 
       const userMessage: ChatMessage = {
         id: `user-${Date.now()}`,
-        role: 'user',
+        role: "user",
         content: text.trim(),
-        type: 'text',
+        type: "text",
         timestamp: Date.now(),
       };
 
       setMessages((prev) => [...prev, userMessage]);
-      setInputText('');
+      setInputText("");
       setIsLoading(true);
 
       try {
-        const response = await fetch('/api/agent/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        const response = await fetch("/api/agent/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             message: text.trim(),
             userAddress: activeAddress,
@@ -292,7 +297,7 @@ ${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : '💡 **Tip:** Click
 
         const agentMessage: ChatMessage = {
           id: `agent-${Date.now()}`,
-          role: 'agent',
+          role: "agent",
           content: data.message,
           type: data.type,
           data: data.data,
@@ -304,7 +309,7 @@ ${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : '💡 **Tip:** Click
 
         // ── Auto-sign deposit with connected NEAR wallet ──
         if (
-          data.type === 'deposit_needed' &&
+          data.type === "deposit_needed" &&
           data.data?.depositAddress &&
           nearConnected
         ) {
@@ -313,11 +318,11 @@ ${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : '💡 **Tip:** Click
       } catch {
         const errorMessage: ChatMessage = {
           id: `error-${Date.now()}`,
-          role: 'agent',
+          role: "agent",
           content: `Connection error. Please check your network and try again.`,
-          type: 'error',
+          type: "error",
           timestamp: Date.now(),
-          suggestedActions: ['Try again'],
+          suggestedActions: ["Try again"],
         };
         setMessages((prev) => [...prev, errorMessage]);
       } finally {
@@ -325,7 +330,14 @@ ${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : '💡 **Tip:** Click
         inputRef.current?.focus();
       }
     },
-    [activeAddress, nearAccountId, nearConnected, executionMode, isLoading, handleWalletDeposit]
+    [
+      activeAddress,
+      nearAccountId,
+      nearConnected,
+      executionMode,
+      isLoading,
+      handleWalletDeposit,
+    ],
   );
 
   // Handle suggested action click
@@ -333,7 +345,7 @@ ${nearAccountId ? `✅ NEAR Wallet: \`${nearAccountId}\`` : '💡 **Tip:** Click
     (action: string) => {
       sendMessage(action);
     },
-    [sendMessage]
+    [sendMessage],
   );
 
   // Handle form submit
@@ -499,7 +511,7 @@ function MessageBubble({
   copiedText: string | null;
   onSuggestedAction: (action: string) => void;
 }) {
-  const isUser = message.role === 'user';
+  const isUser = message.role === "user";
 
   if (isUser) {
     return (
@@ -523,9 +535,9 @@ function MessageBubble({
         {/* Message content */}
         <div
           className={`rounded-2xl rounded-tl-md px-4 py-3 border ${
-            message.type === 'error'
-              ? 'bg-destructive/5 border-destructive/20'
-              : 'bg-card'
+            message.type === "error"
+              ? "bg-destructive/5 border-destructive/20"
+              : "bg-card"
           }`}
         >
           <MarkdownContent
@@ -536,35 +548,34 @@ function MessageBubble({
         </div>
 
         {/* Deposit address copy button (for live quotes and deposit_needed) */}
-        {(message.type === 'live_quote' || message.type === 'deposit_needed') && message.data?.depositAddress && (
-          <div className="flex flex-wrap items-center gap-2 px-1">
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs"
-              onClick={() =>
-                onCopy(String(message.data!.depositAddress))
-              }
-            >
-              {copiedText === String(message.data.depositAddress) ? (
-                <Check className="w-3 h-3 mr-1" />
-              ) : (
-                <Copy className="w-3 h-3 mr-1" />
-              )}
-              Copy Deposit Address
-            </Button>
-            <a
-              href={`https://explorer.near-intents.org/transactions/${String(message.data.depositAddress)}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <Button variant="ghost" size="sm" className="text-xs">
-                <ExternalLink className="w-3 h-3 mr-1" />
-                Explorer
+        {(message.type === "live_quote" || message.type === "deposit_needed") &&
+          message.data?.depositAddress && (
+            <div className="flex flex-wrap items-center gap-2 px-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs"
+                onClick={() => onCopy(String(message.data!.depositAddress))}
+              >
+                {copiedText === String(message.data.depositAddress) ? (
+                  <Check className="w-3 h-3 mr-1" />
+                ) : (
+                  <Copy className="w-3 h-3 mr-1" />
+                )}
+                Copy Deposit Address
               </Button>
-            </a>
-          </div>
-        )}
+              <a
+                href={`https://explorer.near-intents.org/transactions/${String(message.data.depositAddress)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Button variant="ghost" size="sm" className="text-xs">
+                  <ExternalLink className="w-3 h-3 mr-1" />
+                  Explorer
+                </Button>
+              </a>
+            </div>
+          )}
 
         {/* Suggested actions */}
         {message.suggestedActions && message.suggestedActions.length > 0 && (
@@ -602,7 +613,7 @@ function MarkdownContent({
   // Simple markdown renderer for agent messages
   // Supports: **bold**, `code`, tables, links, lists, and line breaks
 
-  const lines = content.split('\n');
+  const lines = content.split("\n");
   const elements: React.ReactNode[] = [];
   let inTable = false;
   let tableRows: string[][] = [];
@@ -620,7 +631,11 @@ function MarkdownContent({
                     key={i}
                     className="text-left px-2 py-1.5 border-b font-medium text-muted-foreground"
                   >
-                    <InlineMarkdown text={cell.trim()} onCopy={onCopy} copiedText={copiedText} />
+                    <InlineMarkdown
+                      text={cell.trim()}
+                      onCopy={onCopy}
+                      copiedText={copiedText}
+                    />
                   </th>
                 ))}
               </tr>
@@ -629,15 +644,22 @@ function MarkdownContent({
               {tableRows.slice(2).map((row, ri) => (
                 <tr key={ri}>
                   {row.map((cell, ci) => (
-                    <td key={ci} className="px-2 py-1.5 border-b border-border/50">
-                      <InlineMarkdown text={cell.trim()} onCopy={onCopy} copiedText={copiedText} />
+                    <td
+                      key={ci}
+                      className="px-2 py-1.5 border-b border-border/50"
+                    >
+                      <InlineMarkdown
+                        text={cell.trim()}
+                        onCopy={onCopy}
+                        copiedText={copiedText}
+                      />
                     </td>
                   ))}
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+        </div>,
       );
       tableRows = [];
       inTable = false;
@@ -648,13 +670,13 @@ function MarkdownContent({
     const line = lines[i];
 
     // Table detection
-    if (line.trim().startsWith('|')) {
+    if (line.trim().startsWith("|")) {
       inTable = true;
       const cells = line
-        .split('|')
+        .split("|")
         .filter((_, idx, arr) => idx > 0 && idx < arr.length - 1);
       // Skip separator rows (|---|---|)
-      if (!/^\s*[-:]+\s*$/.test(cells[0]?.trim() || '')) {
+      if (!/^\s*[-:]+\s*$/.test(cells[0]?.trim() || "")) {
         tableRows.push(cells);
       } else {
         tableRows.push(cells); // Keep separator for structure
@@ -667,7 +689,7 @@ function MarkdownContent({
     }
 
     // Empty line
-    if (line.trim() === '') {
+    if (line.trim() === "") {
       elements.push(<div key={`br-${i}`} className="h-2" />);
       continue;
     }
@@ -675,12 +697,19 @@ function MarkdownContent({
     // Bullet list
     if (/^[•\-\*]\s/.test(line.trim())) {
       elements.push(
-        <div key={`li-${i}`} className="flex items-start gap-1.5 text-sm py-0.5 pl-1">
+        <div
+          key={`li-${i}`}
+          className="flex items-start gap-1.5 text-sm py-0.5 pl-1"
+        >
           <span className="text-muted-foreground mt-0.5">•</span>
           <span>
-            <InlineMarkdown text={line.trim().slice(2)} onCopy={onCopy} copiedText={copiedText} />
+            <InlineMarkdown
+              text={line.trim().slice(2)}
+              onCopy={onCopy}
+              copiedText={copiedText}
+            />
           </span>
-        </div>
+        </div>,
       );
       continue;
     }
@@ -688,14 +717,21 @@ function MarkdownContent({
     // Numbered list
     if (/^\d+\.\s/.test(line.trim())) {
       const num = line.trim().match(/^(\d+)\./)?.[1];
-      const text = line.trim().replace(/^\d+\.\s*/, '');
+      const text = line.trim().replace(/^\d+\.\s*/, "");
       elements.push(
-        <div key={`ol-${i}`} className="flex items-start gap-1.5 text-sm py-0.5 pl-1">
+        <div
+          key={`ol-${i}`}
+          className="flex items-start gap-1.5 text-sm py-0.5 pl-1"
+        >
           <span className="text-primary font-medium min-w-5">{num}.</span>
           <span>
-            <InlineMarkdown text={text} onCopy={onCopy} copiedText={copiedText} />
+            <InlineMarkdown
+              text={text}
+              onCopy={onCopy}
+              copiedText={copiedText}
+            />
           </span>
-        </div>
+        </div>,
       );
       continue;
     }
@@ -704,7 +740,7 @@ function MarkdownContent({
     elements.push(
       <p key={`p-${i}`} className="text-sm leading-relaxed">
         <InlineMarkdown text={line} onCopy={onCopy} copiedText={copiedText} />
-      </p>
+      </p>,
     );
   }
 
@@ -739,9 +775,15 @@ function InlineMarkdown({
 
     // Find earliest match
     const matches = [
-      boldMatch ? { type: 'bold', match: boldMatch, index: boldMatch.index! } : null,
-      codeMatch ? { type: 'code', match: codeMatch, index: codeMatch.index! } : null,
-      linkMatch ? { type: 'link', match: linkMatch, index: linkMatch.index! } : null,
+      boldMatch
+        ? { type: "bold", match: boldMatch, index: boldMatch.index! }
+        : null,
+      codeMatch
+        ? { type: "code", match: codeMatch, index: codeMatch.index! }
+        : null,
+      linkMatch
+        ? { type: "link", match: linkMatch, index: linkMatch.index! }
+        : null,
     ]
       .filter(Boolean)
       .sort((a, b) => a!.index - b!.index);
@@ -759,16 +801,16 @@ function InlineMarkdown({
     }
 
     switch (first.type) {
-      case 'bold':
+      case "bold":
         parts.push(
           <strong key={key++} className="font-semibold">
             {first.match[1]}
-          </strong>
+          </strong>,
         );
         remaining = remaining.slice(first.index + first.match[0].length);
         break;
 
-      case 'code': {
+      case "code": {
         const codeText = first.match[1];
         parts.push(
           <code
@@ -785,13 +827,13 @@ function InlineMarkdown({
             ) : (
               <Copy className="w-2.5 h-2.5 text-muted-foreground inline" />
             )}
-          </code>
+          </code>,
         );
         remaining = remaining.slice(first.index + first.match[0].length);
         break;
       }
 
-      case 'link':
+      case "link":
         parts.push(
           <a
             key={key++}
@@ -802,7 +844,7 @@ function InlineMarkdown({
           >
             {first.match[1]}
             <ExternalLink className="w-3 h-3 inline" />
-          </a>
+          </a>,
         );
         remaining = remaining.slice(first.index + first.match[0].length);
         break;

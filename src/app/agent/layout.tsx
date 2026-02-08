@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "AI Agent - NEAR Intents | Abyss Protocol",
+  title: "Manta - Cross-chain Intelligence | Abyss Protocol",
   description:
-    "Chat with our AI agent to perform cross-chain token swaps using NEAR Intents",
+    "AI-powered cross-chain swaps across 15+ blockchains. Glide between chains with intelligent routing.",
 };
 
 export default function AgentLayout({

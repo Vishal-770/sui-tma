@@ -128,13 +128,13 @@ const IndexerPage = () => {
             <div className="text-center flex-1">
               <h1 className="text-4xl font-bold bg-linear-to-r from-primary to-primary/70 bg-clip-text text-transparent">
                 {currentView === "markets"
-                  ? "Deepbook Markets"
-                  : "Deepbook Assets"}
+                  ? "Marlin Pool Explorer"
+                  : "Marlin Asset Scanner"}
               </h1>
               <p className="text-muted-foreground text-sm mt-1">
                 {currentView === "markets"
-                  ? "Real-time trading pairs and market data from the Deepbook decentralized exchange"
-                  : "Available assets on Deepbook with deposit and withdrawal capabilities"}
+                  ? "Lightning-fast market data from DeepBook V3"
+                  : "Real-time asset tracking and liquidity analysis"}
               </p>
             </div>
 
