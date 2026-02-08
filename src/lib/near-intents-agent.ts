@@ -1484,17 +1484,13 @@ ${status.status === 'FAILED' ? '❌ The swap failed. Please try again with a new
 
     return {
       message: `💳 **Fund Your Wallet**\n\n` +
-        `Send NEAR to this address from any exchange or wallet:\n\n` +
+        `Send NEAR to this address:\n\n` +
         `\`${userNear}\`\n\n` +
-        `**How to fund:**\n` +
-        `1️⃣ Copy the address above\n` +
-        `2️⃣ Go to your exchange (Binance, Coinbase, etc.)\n` +
-        `3️⃣ Withdraw NEAR to this address\n` +
-        `4️⃣ Use the NEAR network (not ERC-20)\n\n` +
+        `Use the /fund command in the bot for a QR code and direct wallet links!\n\n` +
         `💡 After funding, say "balance" to check your balance, then swap any amount you want!`,
       type: 'text',
       data: { nearAddress: userNear },
-      suggestedActions: ['Balance', 'Show tokens', 'Help'],
+      suggestedActions: ['Balance', 'Fund wallet', 'Show tokens'],
     };
   }
 

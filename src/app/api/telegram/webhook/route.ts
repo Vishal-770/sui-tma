@@ -86,6 +86,30 @@ async function sendChatAction(chatId: number, action = "typing") {
   }
 }
 
+async function sendPhoto(
+  chatId: number,
+  photoUrl: string,
+  caption: string,
+  options: Record<string, unknown> = {},
+) {
+  if (!TELEGRAM_TOKEN) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendPhoto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        photo: photoUrl,
+        caption,
+        parse_mode: 'Markdown',
+        ...options,
+      }),
+    });
+  } catch (err) {
+    console.error('[Telegram] Failed to send photo:', err);
+  }
+}
+
 async function answerCallbackQuery(callbackQueryId: string, text?: string) {
   if (!TELEGRAM_TOKEN) return;
   try {
@@ -298,17 +322,28 @@ async function handleFundCommand(chatId: number) {
     return;
   }
 
-  await sendMessage(
+  // Generate QR code URL
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(nearAddr)}&size=300x300&format=png`;
+
+  // Build Mini App URL for rich funding page
+  const fundAppUrl = `${APP_URL}/telegram/fund?address=${encodeURIComponent(nearAddr)}&chatId=${chatId}`;
+
+  // Send QR code as a photo with caption
+  await sendPhoto(
     chatId,
+    qrUrl,
     `💳 *Fund Your Wallet*\n\n` +
       `Send NEAR to this address:\n\`${nearAddr}\`\n\n` +
-      `*How to fund:*\n` +
-      `1️⃣ Copy the address above\n` +
-      `2️⃣ Go to your exchange (Binance, Coinbase, etc.)\n` +
-      `3️⃣ Withdraw NEAR to this address\n` +
-      `4️⃣ Use the *NEAR network* (not ERC-20)\n\n` +
-      `After funding, use /balance to check your balance!`,
-    { reply_markup: buildKeyboard(['Balance', 'Show tokens', 'Help']) },
+      `Scan the QR code above or tap the button below for the full funding page with copy button & wallet links.`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📱 Open Funding Page', web_app: { url: fundAppUrl } }],
+          [{ text: '📋 Copy Address', callback_data: `copy:${nearAddr}` }],
+          [{ text: '💰 Check Balance', callback_data: 'agent:Balance' }],
+        ],
+      },
+    },
   );
 }
 
@@ -413,6 +448,13 @@ async function handleUpdate(update: Record<string, unknown>) {
     }
     if (data === 'connect:wallet') {
       await handleConnectCommand(chatId, 'wallet');
+      return;
+    }
+
+    // Handle "Copy Address" from fund command
+    if (data?.startsWith('copy:')) {
+      const addr = data.slice(5);
+      await sendMessage(chatId, `\`${addr}\`\n\nTap and hold the address above to copy it.`);
       return;
     }
 

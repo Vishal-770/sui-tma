@@ -323,17 +323,27 @@ export function createTradingBot(token: string): Bot<BotContext> {
       return;
     }
 
-    await ctx.reply(
-      `💳 *Fund Your Wallet*\n\n` +
+    // QR code URL for the NEAR address
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(nearAddr)}&size=300x300&format=png`;
+
+    // Mini App funding page URL
+    const fundAppUrl = `${APP_URL}/telegram/fund?address=${encodeURIComponent(nearAddr)}&chatId=${chatId}`;
+
+    // Send QR code as photo with caption + Mini App button
+    await ctx.replyWithPhoto(qrUrl, {
+      caption:
+        `💳 *Fund Your Wallet*\n\n` +
         `Send NEAR to this address:\n\`${nearAddr}\`\n\n` +
-        `*How to fund:*\n` +
-        `1️⃣ Copy the address above\n` +
-        `2️⃣ Go to your exchange (Binance, Coinbase, etc.)\n` +
-        `3️⃣ Withdraw NEAR to this address\n` +
-        `4️⃣ Use the *NEAR network* (not ERC-20)\n\n` +
-        `After funding, use /balance to check your balance!`,
-      { parse_mode: "Markdown", reply_markup: buildKeyboard(["Balance", "Show tokens", "Help"]) },
-    );
+        `Scan the QR code above or tap the button below for the full funding page with copy button & wallet links.`,
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📱 Open Funding Page', web_app: { url: fundAppUrl } }],
+          [{ text: '📋 Copy Address', callback_data: `copy:${nearAddr}` }],
+          [{ text: '💰 Check Balance', callback_data: 'agent:Balance' }],
+        ],
+      },
+    });
   });
 
   // ─── /swap <natural language> ──────────────────────
@@ -610,6 +620,15 @@ export function createTradingBot(token: string): Bot<BotContext> {
           `❌ Wallet setup failed: ${error instanceof Error ? error.message : 'Unknown error'}\n\nTry again with /connect`,
         );
       }
+      return;
+    }
+
+    // Handle "Copy Address" from fund command
+    if (data?.startsWith('copy:')) {
+      const addr = data.slice(5);
+      await ctx.reply(`\`${addr}\`\n\nTap and hold the address above to copy it.`, {
+        parse_mode: "Markdown",
+      });
       return;
     }
 
