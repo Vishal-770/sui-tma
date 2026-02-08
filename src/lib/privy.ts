@@ -449,3 +449,57 @@ export async function executePrivySwapDeposit(
 export function isPrivyConfigured(): boolean {
   return !!(PRIVY_APP_ID && PRIVY_APP_SECRET && PRIVY_AUTH_ID && PRIVY_AUTH_SECRET);
 }
+
+// ============== Balance Checking ==============
+
+export interface NearBalanceInfo {
+  nearBalance: string;       // NEAR in human-readable format (e.g. "1.5")
+  nearBalanceYocto: string;  // NEAR in yoctoNEAR
+  availableNear: string;     // Available (minus storage staking)
+  storageUsed: string;       // Storage used in bytes
+  isInitialized: boolean;
+}
+
+/**
+ * Get the NEAR balance for an account using RPC.
+ */
+export async function getNearBalance(accountId: string): Promise<NearBalanceInfo> {
+  const provider = new JsonRpcProvider({ url: NEAR_RPC_URL });
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const account = (await provider.sendJsonRpc('query', {
+      request_type: 'view_account',
+      finality: 'final',
+      account_id: accountId,
+    })) as any;
+
+    const totalYocto = BigInt(account.amount);
+    const storageYocto = BigInt(account.storage_usage) * BigInt('10000000000000000000'); // ~0.00001 NEAR per byte
+    const availableYocto = totalYocto > storageYocto ? totalYocto - storageYocto : BigInt(0);
+
+    // Convert yoctoNEAR to NEAR (24 decimals)
+    const formatNear = (yocto: bigint): string => {
+      const str = yocto.toString().padStart(25, '0');
+      const whole = str.slice(0, str.length - 24) || '0';
+      const decimal = str.slice(str.length - 24, str.length - 18); // 6 decimal places
+      return `${whole}.${decimal}`.replace(/\.?0+$/, '') || '0';
+    };
+
+    return {
+      nearBalance: formatNear(totalYocto),
+      nearBalanceYocto: totalYocto.toString(),
+      availableNear: formatNear(availableYocto),
+      storageUsed: account.storage_usage.toString(),
+      isInitialized: true,
+    };
+  } catch {
+    return {
+      nearBalance: '0',
+      nearBalanceYocto: '0',
+      availableNear: '0',
+      storageUsed: '0',
+      isInitialized: false,
+    };
+  }
+}

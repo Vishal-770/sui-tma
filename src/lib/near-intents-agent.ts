@@ -83,6 +83,7 @@ export interface ParsedIntent {
     | 'status'
     | 'help'
     | 'balance'
+    | 'fund'
     | 'confirm'
     | 'unknown';
   tokenIn?: string;
@@ -250,6 +251,11 @@ export function parseIntent(message: string): ParsedIntent {
   // Balance check
   if (/(?:my\s+)?balance/i.test(lower) || /how much (?:do i|i) have/i.test(lower)) {
     return { action: 'balance', raw };
+  }
+
+  // Fund wallet
+  if (/^(?:fund|deposit|add funds|fund wallet|top up)/i.test(lower)) {
+    return { action: 'fund', raw };
   }
 
   // Swap / Quote intent parsing
@@ -468,6 +474,9 @@ export class NearIntentsAgent {
 
       case 'balance':
         return this.handleBalance(opts);
+
+      case 'fund':
+        return this.handleFund(opts);
 
       case 'unknown':
       default:
@@ -1409,40 +1418,83 @@ ${status.status === 'FAILED' ? '❌ The swap failed. Please try again with a new
     }
   }
 
-  private handleBalance(opts: ProcessMessageOptions): AgentResponse {
-    const nearConfigured = isNearAccountConfigured();
-    const nearAccountId = getNearAccountId();
-    const userAddress = opts.userAddress;
+  private async handleBalance(opts: ProcessMessageOptions): Promise<AgentResponse> {
     const userNear = opts.nearAccountId;
+    const userAddress = opts.userAddress;
 
-    let message = '';
-
-    if (userNear) {
-      message += `**Your NEAR Account:** \`${userNear}\`\n\n`;
-    } else if (nearConfigured) {
-      message += `**Server NEAR Account:** \`${nearAccountId}\` (auto-execution)\n\n`;
-    }
-
-    if (userAddress) {
-      message += `**Connected Wallet:** \`${userAddress}\`\n\n`;
-    }
-
-    if (!nearConfigured && !userAddress && !userNear) {
+    if (!userNear) {
       return {
-        message: '⚠️ No NEAR account and no wallet connected. Enter your NEAR account ID or connect a wallet to get started.',
+        message: '⚠️ No NEAR wallet connected. Use /connect to create one or link your existing wallet.',
         type: 'text',
-        suggestedActions: ['Help'],
+        suggestedActions: ['Connect NEAR', 'Help'],
       };
     }
 
-    message += userNear
-      ? `I can execute swaps using your NEAR account \`${userNear}\`. Try "swap 0.01 NEAR for SUI"!`
-      : 'I can execute swaps from the NEAR account. Try "swap 0.01 NEAR for SUI" to get started!';
+    try {
+      const { getNearBalance } = await import('./privy');
+      const balance = await getNearBalance(userNear);
+
+      if (!balance.isInitialized) {
+        return {
+          message: `💰 **Wallet Balance**\n\n` +
+            `**NEAR Account:** \`${userNear}\`\n` +
+            `**Status:** ❌ Not initialized\n\n` +
+            `Your account hasn't received any NEAR yet. Send NEAR to activate it.\n` +
+            `Use /fund to see your deposit address.`,
+          type: 'text',
+          suggestedActions: ['Fund wallet', 'Help'],
+        };
+      }
+
+      let message = `💰 **Wallet Balance**\n\n` +
+        `**NEAR Account:** \`${userNear}\`\n` +
+        `**Total Balance:** ${balance.nearBalance} NEAR\n` +
+        `**Available:** ${balance.availableNear} NEAR\n`;
+
+      if (userAddress) {
+        message += `\n**Receive Wallet:** \`${userAddress}\`\n`;
+      }
+
+      message += `\n💡 Try: "swap 0.5 NEAR for SUI" or any amount you want!`;
+
+      return {
+        message,
+        type: 'text',
+        suggestedActions: [`Swap ${balance.availableNear} NEAR for SUI`, 'Show tokens', 'Fund wallet'],
+      };
+    } catch (error) {
+      return {
+        message: `Failed to fetch balance: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        type: 'error',
+        suggestedActions: ['Try again', 'Help'],
+      };
+    }
+  }
+
+  private handleFund(opts: ProcessMessageOptions): AgentResponse {
+    const userNear = opts.nearAccountId;
+
+    if (!userNear) {
+      return {
+        message: '⚠️ No NEAR wallet connected. Use /connect to create one first.',
+        type: 'text',
+        suggestedActions: ['Connect NEAR', 'Help'],
+      };
+    }
 
     return {
-      message,
+      message: `💳 **Fund Your Wallet**\n\n` +
+        `Send NEAR to this address from any exchange or wallet:\n\n` +
+        `\`${userNear}\`\n\n` +
+        `**How to fund:**\n` +
+        `1️⃣ Copy the address above\n` +
+        `2️⃣ Go to your exchange (Binance, Coinbase, etc.)\n` +
+        `3️⃣ Withdraw NEAR to this address\n` +
+        `4️⃣ Use the NEAR network (not ERC-20)\n\n` +
+        `💡 After funding, say "balance" to check your balance, then swap any amount you want!`,
       type: 'text',
-      suggestedActions: ['Swap 0.01 NEAR for SUI', 'Show tokens', 'Help'],
+      data: { nearAddress: userNear },
+      suggestedActions: ['Balance', 'Show tokens', 'Help'],
     };
   }
 
