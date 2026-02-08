@@ -271,6 +271,7 @@ async function handleStart(chatId: number) {
       `/connect — 🔗 Create or connect NEAR wallet\n` +
       `/balance — 💰 Check wallet balance\n` +
       `/fund — 💳 Fund your wallet\n` +
+      `/app — 📱 Open trading Mini App\n` +
       `/disconnect — Unlink NEAR wallet\n` +
       `/tokens — Supported tokens\n` +
       `/status — Check swap status\n` +
@@ -335,11 +336,9 @@ async function handleFundCommand(chatId: number) {
   // Build Mini App URL for rich funding page
   const fundAppUrl = `${APP_URL}/telegram/fund?address=${encodeURIComponent(nearAddr)}&chatId=${chatId}`;
 
-  // Build inline keyboard — use url button (opens in browser) instead of web_app
-  // since web_app requires BotFather domain config that may not be set
   const replyMarkup = {
     inline_keyboard: [
-      [{ text: '📱 Open Funding Page', url: fundAppUrl }],
+      [{ text: '📱 Open Funding Page', web_app: { url: fundAppUrl } }],
       [{ text: '📋 Copy Address', callback_data: `copy:${nearAddr}` }],
       [{ text: '💰 Check Balance', callback_data: 'agent:Balance' }],
     ],
@@ -586,6 +585,22 @@ async function handleUpdate(update: Record<string, unknown>) {
   // ── /fund — Show deposit address ──
   if (text === "/fund") {
     await handleFundCommand(chatId);
+    return;
+  }
+
+  // ── /app — Open the TMA ──
+  if (text === "/app") {
+    await sendMessage(
+      chatId,
+      `📱 *Open Trading App*\n\nTap the button below to open the full trading interface:`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🚀 Open DeepIntent App', web_app: { url: APP_URL } }],
+          ],
+        },
+      },
+    );
     return;
   }
 

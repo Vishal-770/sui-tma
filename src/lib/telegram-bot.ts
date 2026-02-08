@@ -228,6 +228,7 @@ export function createTradingBot(token: string): Bot<BotContext> {
         `/connect — 🔗 Connect NEAR wallet\n` +
         `/balance — 💰 Check wallet balance\n` +
         `/fund — 💳 Fund your wallet\n` +
+        `/app — 📱 Open trading Mini App\n` +
         `/disconnect — Unlink NEAR wallet\n` +
         `/tokens — Supported tokens\n` +
         `/status — Check swap status\n` +
@@ -310,6 +311,22 @@ export function createTradingBot(token: string): Bot<BotContext> {
     );
   });
 
+  // ─── /app — Open the Telegram Mini App ──
+
+  bot.command("app", async (ctx) => {
+    await ctx.reply(
+      `📱 *Open Trading App*\n\nTap the button below to open the full trading interface:`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🚀 Open DeepIntent App', web_app: { url: APP_URL } }],
+          ],
+        },
+      },
+    );
+  });
+
   // ─── /fund — Show deposit address to fund wallet ──
 
   bot.command("fund", async (ctx) => {
@@ -329,10 +346,9 @@ export function createTradingBot(token: string): Bot<BotContext> {
     // Mini App funding page URL
     const fundAppUrl = `${APP_URL}/telegram/fund?address=${encodeURIComponent(nearAddr)}&chatId=${chatId}`;
 
-    // Use url button instead of web_app (web_app requires BotFather domain config)
     const replyMarkup = {
       inline_keyboard: [
-        [{ text: '📱 Open Funding Page', url: fundAppUrl }],
+        [{ text: '📱 Open Funding Page', web_app: { url: fundAppUrl } }],
         [{ text: '📋 Copy Address', callback_data: `copy:${nearAddr}` }],
         [{ text: '💰 Check Balance', callback_data: 'agent:Balance' }],
       ],
