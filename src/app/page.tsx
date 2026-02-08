@@ -20,17 +20,17 @@ export default function Home() {
         {/* Header */}
         <div className="text-center mb-12">
           <div className="flex items-center justify-center gap-3 mb-6">
-            <div className="w-16 h-16 bg-card flex items-center justify-center rounded-xl">
+            <div className="w-16 h-16 flex items-center justify-center">
               <Image
                 src="/logo-tma.png"
-                alt="SuiTrader Logo"
+                alt="Abyss Protocol Logo"
                 width={64}
                 height={64}
               />
             </div>
           </div>
 
-          <h1 className="text-4xl font-bold mb-4">SuiTrader</h1>
+          <h1 className="text-4xl font-bold mb-4">Abyss Protocol</h1>
           <p className="text-xl text-muted-foreground mb-8">
             Private intent-based trading on Sui
           </p>

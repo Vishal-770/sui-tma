@@ -217,10 +217,10 @@ export default function AuthCallbackPage() {
         <div className="text-center space-y-4">
           {status === "processing" && (
             <>
-              <div className="w-16 h-16 mx-auto rounded-2xl flex items-center justify-center">
+              <div className="w-16 h-16 mx-auto flex items-center justify-center">
                 <Image
                   src="/logo-tma.png"
-                  alt="SuiTrader Logo"
+                  alt="Abyss Protocol Logo"
                   width={64}
                   height={64}
                   className="w-12 h-12 object-contain"

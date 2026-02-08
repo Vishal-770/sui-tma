@@ -26,6 +26,9 @@ import {
   LogOut,
   User,
   Network,
+  Menu,
+  X,
+  Sparkles,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -81,20 +84,36 @@ function WalletStatus() {
   // Show zkLogin status if authenticated via zkLogin
   if (isAuthenticated && session?.zkLoginAddress) {
     return (
-      <div className="flex items-center gap-2">
-        <Badge variant="outline" className="px-2 py-1 text-xs">
-          <Network className="w-3 h-3 mr-1" />
+      <div className="flex items-center gap-2.5">
+        <Badge
+          variant="outline"
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium border-primary/20 bg-primary/5"
+        >
+          <div className="w-1.5 h-1.5 rounded-full bg-chart-2 animate-pulse" />
           {CURRENT_ENV}
         </Badge>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" className="flex items-center gap-2">
-              <Wallet className="w-4 h-4" />
-              <span className="hidden sm:inline text-xs font-mono">
-                {session.zkLoginAddress.slice(0, 6)}...
-                {session.zkLoginAddress.slice(-4)}
-              </span>
-              <Badge variant="secondary" className="ml-1 px-1.5 py-0.5 text-xs">
+            <Button
+              variant="outline"
+              className="flex items-center gap-2 hover:bg-accent transition-all duration-200 shadow-sm hover:shadow-md"
+            >
+              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+                <Wallet className="w-4 h-4 text-primary" />
+              </div>
+              <div className="hidden sm:flex flex-col items-start gap-0.5">
+                <span className="text-[10px] text-muted-foreground font-medium leading-none">
+                  zkLogin
+                </span>
+                <span className="text-xs font-mono leading-none">
+                  {session.zkLoginAddress.slice(0, 6)}...
+                  {session.zkLoginAddress.slice(-4)}
+                </span>
+              </div>
+              <Badge
+                variant="secondary"
+                className="ml-1 px-2 py-0.5 text-[11px] font-semibold"
+              >
                 {balance} SUI
               </Badge>
             </Button>
@@ -145,20 +164,36 @@ function WalletStatus() {
   // Show dapp-kit wallet if connected
   if (dappKitAccount) {
     return (
-      <div className="flex items-center gap-2">
-        <Badge variant="outline" className="px-2 py-1 text-xs">
-          <Network className="w-3 h-3 mr-1" />
+      <div className="flex items-center gap-2.5">
+        <Badge
+          variant="outline"
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium border-primary/20 bg-primary/5"
+        >
+          <div className="w-1.5 h-1.5 rounded-full bg-chart-2 animate-pulse" />
           {CURRENT_ENV}
         </Badge>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" className="flex items-center gap-2">
-              <Wallet className="w-4 h-4" />
-              <span className="hidden sm:inline text-xs font-mono">
-                {dappKitAccount.address.slice(0, 6)}...
-                {dappKitAccount.address.slice(-4)}
-              </span>
-              <Badge variant="secondary" className="ml-1 px-1.5 py-0.5 text-xs">
+            <Button
+              variant="outline"
+              className="flex items-center gap-2 hover:bg-accent transition-all duration-200 shadow-sm hover:shadow-md"
+            >
+              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+                <Wallet className="w-4 h-4 text-primary" />
+              </div>
+              <div className="hidden sm:flex flex-col items-start gap-0.5">
+                <span className="text-[10px] text-muted-foreground font-medium leading-none">
+                  Wallet
+                </span>
+                <span className="text-xs font-mono leading-none">
+                  {dappKitAccount.address.slice(0, 6)}...
+                  {dappKitAccount.address.slice(-4)}
+                </span>
+              </div>
+              <Badge
+                variant="secondary"
+                className="ml-1 px-2 py-0.5 text-[11px] font-semibold"
+              >
                 {balance} SUI
               </Badge>
             </Button>
@@ -210,14 +245,22 @@ function WalletStatus() {
 
   // Show both connection options
   return (
-    <div className="flex items-center gap-2">
-      <ConnectButton />
-      <span className="text-muted-foreground text-sm hidden sm:inline">or</span>
+    <div className="flex items-center gap-2.5">
+      <div className="hidden sm:block">
+        <ConnectButton />
+      </div>
+      <span className="text-muted-foreground text-xs hidden sm:inline font-medium">
+        or
+      </span>
       <Link
         href="/login"
-        className="px-3 py-1.5 bg-primary hover:bg-primary/90 rounded-lg text-sm text-primary-foreground font-medium transition-colors"
+        className="group relative px-4 py-2 bg-primary hover:bg-primary/90 rounded-lg text-sm text-primary-foreground font-semibold transition-all duration-200 shadow-sm hover:shadow-md overflow-hidden"
       >
-        Sign in
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
+        <span className="relative flex items-center gap-1.5">
+          <Sparkles className="w-3.5 h-3.5" />
+          Sign in
+        </span>
       </Link>
     </div>
   );
@@ -225,51 +268,109 @@ function WalletStatus() {
 
 export function Navigation() {
   const pathname = usePathname();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <nav className="bg-background border-b sticky top-0 z-50 backdrop-blur-sm">
+    <nav className="bg-background/80 border-b sticky top-0 z-50 backdrop-blur-md supports-[backdrop-filter]:bg-background/60">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="flex h-16 justify-between">
-          <div className="flex">
-            <div className="flex shrink-0 items-center">
-              <Link
-                href="/"
-                className="text-xl font-bold flex items-center gap-2"
-              >
-                <div className="w-8 h-8 flex items-center justify-center">
-                  <Image
-                    src="/logo-tma.png"
-                    alt="SuiTrader Logo"
-                    width={32}
-                    height={32}
-                    className="w-full h-full object-contain"
-                  />
-                </div>
-                <span className="hidden sm:inline">SuiTrader</span>
-              </Link>
-            </div>
-            <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
-              {navigation.map((item) => (
-                <Link
-                  key={item.name}
-                  href={item.href}
-                  className={cn(
-                    "inline-flex items-center border-b-2 px-1 pt-1 text-sm font-medium",
-                    pathname === item.href ||
-                      pathname.startsWith(item.href + "/")
-                      ? "border-primary text-primary"
-                      : "border-transparent text-muted-foreground hover:border-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {item.name}
-                </Link>
-              ))}
+        <div className="flex h-16 justify-between items-center">
+          {/* Logo Section */}
+          <div className="flex items-center gap-8">
+            <Link
+              href="/"
+              className="flex items-center gap-2.5 group transition-all duration-300 hover:opacity-80"
+            >
+              <div className="w-9 h-9 flex items-center justify-center transition-transform duration-300 group-hover:scale-110">
+                <Image
+                  src="/logo-tma.png"
+                  alt="Abyss Protocol Logo"
+                  width={36}
+                  height={36}
+                  className="w-full h-full object-contain"
+                />
+              </div>
+              <div className="flex flex-col">
+                <span className="hidden sm:inline text-lg font-bold bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">
+                  Abyss Protocol
+                </span>
+                <span className="hidden sm:inline text-[10px] text-muted-foreground font-medium -mt-1">
+                  Dive into DeepBook
+                </span>
+              </div>
+            </Link>
+
+            {/* Desktop Navigation */}
+            <div className="hidden md:flex items-center gap-1">
+              {navigation.map((item) => {
+                const isActive =
+                  pathname === item.href ||
+                  pathname.startsWith(item.href + "/");
+                return (
+                  <Link
+                    key={item.name}
+                    href={item.href}
+                    className={cn(
+                      "relative px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200",
+                      isActive
+                        ? "text-primary bg-primary/10"
+                        : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                    )}
+                  >
+                    {item.name}
+                    {isActive && (
+                      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1/2 h-0.5 bg-primary rounded-full" />
+                    )}
+                  </Link>
+                );
+              })}
             </div>
           </div>
-          <div className="flex items-center">
+
+          {/* Right Section */}
+          <div className="flex items-center gap-3">
             <WalletStatus />
+
+            {/* Mobile menu button */}
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="md:hidden inline-flex items-center justify-center p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            >
+              {mobileMenuOpen ? (
+                <X className="w-5 h-5" />
+              ) : (
+                <Menu className="w-5 h-5" />
+              )}
+            </button>
           </div>
         </div>
+
+        {/* Mobile Navigation */}
+        {mobileMenuOpen && (
+          <div className="md:hidden py-4 border-t animate-in slide-in-from-top-2 duration-200">
+            <div className="flex flex-col gap-1">
+              {navigation.map((item) => {
+                const isActive =
+                  pathname === item.href ||
+                  pathname.startsWith(item.href + "/");
+                return (
+                  <Link
+                    key={item.name}
+                    href={item.href}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={cn(
+                      "px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200",
+                      isActive
+                        ? "text-primary bg-primary/10"
+                        : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                    )}
+                  >
+                    {item.name}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </nav>
   );

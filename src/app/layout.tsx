@@ -6,7 +6,7 @@ import { Providers } from "@/components/Providers";
 import "./global.css";
 import { ConditionalNavigation } from "@/components/ConditionalNavigation";
 export const metadata: Metadata = {
-  title: "SuiTrader - Private Intent Trading",
+  title: "Abyss Protocol - Private Intent Trading",
   description: "Private intent-based trading on Sui with zkLogin",
 };
 

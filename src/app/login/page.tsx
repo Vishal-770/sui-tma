@@ -97,10 +97,10 @@ export default function LoginPage() {
       {/* Hero Section */}
       <div className="flex-1 flex flex-col items-center justify-center text-center pt-5">
         {/* Logo */}
-        <div className="w-18 h-18 rounded-2xl mb-6 flex items-center justify-center shrink-0 bg-linear-to-br from-primary to-primary/70 shadow-lg">
+        <div className="w-18 h-18 mb-6 flex items-center justify-center shrink-0">
           <Image
             src="/logo-tma.png"
-            alt="SuiTrader Logo"
+            alt="Abyss Protocol Logo"
             width={72}
             height={72}
             className="w-9 h-9 object-contain"
@@ -109,7 +109,7 @@ export default function LoginPage() {
 
         {/* Title */}
         <h1 className="text-[26px] font-bold mb-2 text-foreground">
-          SuiTrader
+          Abyss Protocol
         </h1>
         <p className="text-muted-foreground text-[15px] mb-8">
           Private Intent Trading on Sui

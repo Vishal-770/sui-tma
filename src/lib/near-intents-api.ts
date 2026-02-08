@@ -1,14 +1,14 @@
 /**
  * NEAR Intents 1-Click API Wrapper
- * 
+ *
  * TypeScript wrapper for the NEAR Intents 1-Click REST API.
  * Handles token listing, quote generation, deposit submission, and status checking.
- * 
+ *
  * Base URL: https://1click.chaindefuser.com
  * Docs: https://docs.near-intents.org/near-intents/integration/distribution-channels/1click-api
  */
 
-const BASE_URL = 'https://1click.chaindefuser.com';
+const BASE_URL = "https://1click.chaindefuser.com";
 
 // ============== Types ==============
 
@@ -22,10 +22,10 @@ export interface TokenInfo {
   icon?: string;
 }
 
-export type SwapType = 'EXACT_INPUT' | 'EXACT_OUTPUT';
-export type DepositType = 'ORIGIN_CHAIN' | 'INTENTS';
-export type RefundType = 'ORIGIN_CHAIN' | 'INTENTS';
-export type RecipientType = 'DESTINATION_CHAIN' | 'INTENTS';
+export type SwapType = "EXACT_INPUT" | "EXACT_OUTPUT";
+export type DepositType = "ORIGIN_CHAIN" | "INTENTS";
+export type RefundType = "ORIGIN_CHAIN" | "INTENTS";
+export type RecipientType = "DESTINATION_CHAIN" | "INTENTS";
 
 export interface QuoteRequest {
   dry: boolean;
@@ -62,13 +62,13 @@ export interface QuoteResponse {
   error?: string;
 }
 
-export type SwapStatus = 
-  | 'PENDING_DEPOSIT'
-  | 'PROCESSING'
-  | 'SUCCESS'
-  | 'INCOMPLETE_DEPOSIT'
-  | 'REFUNDED'
-  | 'FAILED';
+export type SwapStatus =
+  | "PENDING_DEPOSIT"
+  | "PROCESSING"
+  | "SUCCESS"
+  | "INCOMPLETE_DEPOSIT"
+  | "REFUNDED"
+  | "FAILED";
 
 export interface StatusResponse {
   status: SwapStatus;
@@ -97,10 +97,10 @@ class NearIntentsAPI {
 
   private getHeaders(): HeadersInit {
     const headers: HeadersInit = {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     };
     if (this.jwt) {
-      headers['Authorization'] = `Bearer ${this.jwt}`;
+      headers["Authorization"] = `Bearer ${this.jwt}`;
     }
     return headers;
   }
@@ -111,12 +111,14 @@ class NearIntentsAPI {
    */
   async getTokens(): Promise<TokenInfo[]> {
     const response = await fetch(`${BASE_URL}/v0/tokens`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch tokens: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch tokens: ${response.status} ${response.statusText}`,
+      );
     }
 
     return response.json();
@@ -128,7 +130,7 @@ class NearIntentsAPI {
   async getTokensByChain(chain: string): Promise<TokenInfo[]> {
     const allTokens = await this.getTokens();
     return allTokens.filter(
-      (t) => t.blockchain.toLowerCase() === chain.toLowerCase()
+      (t) => t.blockchain.toLowerCase() === chain.toLowerCase(),
     );
   }
 
@@ -155,7 +157,7 @@ class NearIntentsAPI {
 
     // Prefer exact symbol match
     const exact = tokens.find(
-      (t) => t.symbol.toLowerCase() === symbol.toLowerCase()
+      (t) => t.symbol.toLowerCase() === symbol.toLowerCase(),
     );
     return exact || tokens[0];
   }
@@ -164,27 +166,34 @@ class NearIntentsAPI {
    * Request a swap quote from the 1-Click API.
    */
   async getQuote(request: QuoteRequest): Promise<QuoteResponse> {
-    console.log('[1-Click API] Quote request:', JSON.stringify({
-      dry: request.dry,
-      originAsset: request.originAsset,
-      destinationAsset: request.destinationAsset,
-      amount: request.amount,
-      refundTo: request.refundTo,
-      recipient: request.recipient,
-      depositType: request.depositType,
-      refundType: request.refundType,
-      recipientType: request.recipientType,
-    }, null, 2));
-    
+    console.log(
+      "[1-Click API] Quote request:",
+      JSON.stringify(
+        {
+          dry: request.dry,
+          originAsset: request.originAsset,
+          destinationAsset: request.destinationAsset,
+          amount: request.amount,
+          refundTo: request.refundTo,
+          recipient: request.recipient,
+          depositType: request.depositType,
+          refundType: request.refundType,
+          recipientType: request.recipientType,
+        },
+        null,
+        2,
+      ),
+    );
+
     const response = await fetch(`${BASE_URL}/v0/quote`, {
-      method: 'POST',
+      method: "POST",
       headers: this.getHeaders(),
       body: JSON.stringify(request),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[1-Click API] Quote error:', response.status, errorText);
+      console.error("[1-Click API] Quote error:", response.status, errorText);
       throw new Error(`Failed to get quote: ${response.status} - ${errorText}`);
     }
 
@@ -193,7 +202,7 @@ class NearIntentsAPI {
 
   /**
    * Get a dry-run quote (estimation only, no deposit address generated).
-   * 
+   *
    * IMPORTANT: refundTo must be a valid address on the ORIGIN chain.
    * recipient must be a valid address on the DESTINATION chain.
    */
@@ -201,30 +210,30 @@ class NearIntentsAPI {
     originAsset: string;
     destinationAsset: string;
     amount: string;
-    refundAddress: string;     // Must be valid on ORIGIN chain
-    recipientAddress: string;  // Must be valid on DESTINATION chain
+    refundAddress: string; // Must be valid on ORIGIN chain
+    recipientAddress: string; // Must be valid on DESTINATION chain
   }): Promise<QuoteResponse> {
     return this.getQuote({
       dry: true,
-      swapType: 'EXACT_INPUT',
+      swapType: "EXACT_INPUT",
       slippageTolerance: 100, // 1%
       originAsset: params.originAsset,
-      depositType: 'ORIGIN_CHAIN',
+      depositType: "ORIGIN_CHAIN",
       destinationAsset: params.destinationAsset,
       amount: params.amount,
       refundTo: params.refundAddress,
-      refundType: 'ORIGIN_CHAIN',
+      refundType: "ORIGIN_CHAIN",
       recipient: params.recipientAddress,
-      recipientType: 'DESTINATION_CHAIN',
+      recipientType: "DESTINATION_CHAIN",
       deadline: new Date(Date.now() + 3 * 60 * 1000).toISOString(),
-      referral: 'suitrader',
+      referral: "abyssprotocol",
       quoteWaitingTimeMs: 5000,
     });
   }
 
   /**
    * Get a live quote with deposit address for execution.
-   * 
+   *
    * IMPORTANT: refundTo must be a valid address on the ORIGIN chain.
    * recipient must be a valid address on the DESTINATION chain.
    */
@@ -232,24 +241,24 @@ class NearIntentsAPI {
     originAsset: string;
     destinationAsset: string;
     amount: string;
-    refundAddress: string;     // Must be valid on ORIGIN chain
-    recipientAddress: string;  // Must be valid on DESTINATION chain
+    refundAddress: string; // Must be valid on ORIGIN chain
+    recipientAddress: string; // Must be valid on DESTINATION chain
     slippageTolerance?: number;
   }): Promise<QuoteResponse> {
     return this.getQuote({
       dry: false,
-      swapType: 'EXACT_INPUT',
+      swapType: "EXACT_INPUT",
       slippageTolerance: params.slippageTolerance ?? 100,
       originAsset: params.originAsset,
-      depositType: 'ORIGIN_CHAIN',
+      depositType: "ORIGIN_CHAIN",
       destinationAsset: params.destinationAsset,
       amount: params.amount,
       refundTo: params.refundAddress,
-      refundType: 'ORIGIN_CHAIN',
+      refundType: "ORIGIN_CHAIN",
       recipient: params.recipientAddress,
-      recipientType: 'DESTINATION_CHAIN',
+      recipientType: "DESTINATION_CHAIN",
       deadline: new Date(Date.now() + 3 * 60 * 1000).toISOString(),
-      referral: 'suitrader',
+      referral: "abyssprotocol",
       quoteWaitingTimeMs: 5000,
     });
   }
@@ -259,14 +268,16 @@ class NearIntentsAPI {
    */
   async submitDepositTx(request: DepositSubmitRequest): Promise<void> {
     const response = await fetch(`${BASE_URL}/v0/deposit/submit`, {
-      method: 'POST',
+      method: "POST",
       headers: this.getHeaders(),
       body: JSON.stringify(request),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Failed to submit deposit tx: ${response.status} - ${errorText}`);
+      throw new Error(
+        `Failed to submit deposit tx: ${response.status} - ${errorText}`,
+      );
     }
   }
 
@@ -277,14 +288,16 @@ class NearIntentsAPI {
     const response = await fetch(
       `${BASE_URL}/v0/status?depositAddress=${encodeURIComponent(depositAddress)}`,
       {
-        method: 'GET',
+        method: "GET",
         headers: this.getHeaders(),
-      }
+      },
     );
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Failed to get status: ${response.status} - ${errorText}`);
+      throw new Error(
+        `Failed to get status: ${response.status} - ${errorText}`,
+      );
     }
 
     return response.json();
