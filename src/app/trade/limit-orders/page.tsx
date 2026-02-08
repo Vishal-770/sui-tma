@@ -6,8 +6,21 @@ import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
   useSuiClient,
+  ConnectButton,
 } from "@mysten/dapp-kit";
 import Link from "next/link";
+import {
+  Home,
+  TrendingUp,
+  Wallet,
+  Zap,
+  CheckCircle2,
+  AlertCircle,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Loader2,
+} from "lucide-react";
 import { useNetwork, useNetworkConfig } from "@/contexts/NetworkContext";
 import { NetworkToggle } from "@/components/NetworkToggle";
 import {
@@ -22,6 +35,13 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -29,13 +49,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import {
   getConfig,
   getAvailablePoolKeys,
   getPoolInfo,
-  createBalanceManager,
   generateTradeProofAsOwner,
-  depositToBalanceManager,
   placeLimitOrder,
   cancelOrder as dbCancelOrder,
   OrderType,
@@ -83,11 +111,15 @@ export default function LimitOrdersPage() {
   const [userBalanceManagerId, setUserBalanceManagerId] = useState<
     string | null
   >(null);
-  const [manualBmId, setManualBmId] = useState<string>("");
-  const [depositAmount, setDepositAmount] = useState<string>("");
-  const [depositCoinType, setDepositCoinType] = useState<string>("SUI");
   const [bmBalances, setBmBalances] = useState<Record<string, string>>({});
   const [isLoadingBalances, setIsLoadingBalances] = useState(false);
+  const [availableBalanceManagers, setAvailableBalanceManagers] = useState<
+    Array<{ id: string; balances: Record<string, string> }>
+  >([]);
+  const [isLoadingBalanceManagers, setIsLoadingBalanceManagers] =
+    useState(false);
+  const [selectedManagerIndex, setSelectedManagerIndex] = useState<number>(0);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const account = useCurrentAccount();
   const suiClient = useSuiClient();
@@ -146,6 +178,35 @@ export default function LimitOrdersPage() {
     [suiClient],
   );
 
+  // Update selected balance manager when availableBalanceManagers changes
+  useEffect(() => {
+    if (availableBalanceManagers.length > 0) {
+      // Check if we have a saved balance manager
+      const savedBm = localStorage.getItem(
+        `balance_manager_${network}_${account?.address}`,
+      );
+
+      if (savedBm) {
+        // Find the index of the saved balance manager
+        const savedIndex = availableBalanceManagers.findIndex(
+          (m) => m.id === savedBm,
+        );
+        if (savedIndex !== -1) {
+          setSelectedManagerIndex(savedIndex);
+          setUserBalanceManagerId(savedBm);
+        } else {
+          // Saved BM not found, use first available
+          setSelectedManagerIndex(0);
+          setUserBalanceManagerId(availableBalanceManagers[0].id);
+        }
+      } else {
+        // No saved BM, use first available
+        setSelectedManagerIndex(0);
+        setUserBalanceManagerId(availableBalanceManagers[0].id);
+      }
+    }
+  }, [availableBalanceManagers, network, account?.address]);
+
   // Initialize and reset on network change
   useEffect(() => {
     addLog("Limit Orders page initialized");
@@ -168,18 +229,14 @@ export default function LimitOrdersPage() {
     }
   }, [addLog, account?.address, network, config.packageId, isMainnet]);
 
-  // Clear Balance Manager
-  const handleClearBalanceManager = useCallback(() => {
-    // Clear state first, regardless of account
-    setUserBalanceManagerId(null);
-    setBmBalances({});
-
-    // Then clear localStorage if account is available
-    if (account?.address) {
-      localStorage.removeItem(`balance_manager_${network}_${account.address}`);
-    }
-    addLog("Balance Manager cleared");
-  }, [account?.address, addLog, network]);
+  // Helper to map coin type to symbol
+  const getCoinSymbol = (coinType: string): string => {
+    if (coinType.includes("::sui::SUI")) return "SUI";
+    if (coinType.includes("::deep::DEEP")) return "DEEP";
+    if (coinType.includes("USDC")) return "USDC";
+    if (coinType.includes("USDT")) return "USDT";
+    return coinType.split("::").pop() || "UNKNOWN";
+  };
 
   // Fetch Balance Manager balances
   const fetchBmBalances = useCallback(async () => {
@@ -192,21 +249,81 @@ export default function LimitOrdersPage() {
         options: { showContent: true },
       });
 
-      if (bmObject.data?.content && "fields" in bmObject.data.content) {
-        const fields = bmObject.data.content.fields as any;
-        const balances: Record<string, string> = {};
+      if (
+        !bmObject.data?.content ||
+        bmObject.data.content.dataType !== "moveObject"
+      ) {
+        setBmBalances({});
+        setIsLoadingBalances(false);
+        return;
+      }
 
-        // Extract balances from the object (structure may vary)
-        if (fields.balances && fields.balances.fields) {
-          const balanceFields = fields.balances.fields;
-          // Dynamic field structure - parse as needed
-          addLog("  Balance Manager object found");
+      const fields = bmObject.data.content.fields as any;
+      const balances: Record<string, string> = {};
+
+      // The balances are stored in a Table (dynamic field)
+      const balancesTableId = fields.balances?.fields?.id?.id;
+      if (!balancesTableId) {
+        setBmBalances({});
+        setIsLoadingBalances(false);
+        return;
+      }
+
+      // Get dynamic fields of the balances table
+      const dynamicFields = await suiClient.getDynamicFields({
+        parentId: balancesTableId,
+      });
+
+      // Fetch each balance
+      for (const field of dynamicFields.data) {
+        try {
+          const fieldObject = await suiClient.getDynamicFieldObject({
+            parentId: balancesTableId,
+            name: (field as any).name,
+          });
+
+          if (
+            fieldObject.data?.content &&
+            fieldObject.data.content.dataType === "moveObject"
+          ) {
+            const fieldData = fieldObject.data.content.fields as any;
+            const coinType =
+              (field as any).name?.value?.name ||
+              (field as any).objectType?.split("<")[1]?.split(">")[0];
+            const amount = fieldData.value || "0";
+
+            if (coinType) {
+              const symbol = getCoinSymbol(coinType);
+
+              // Get decimals for proper formatting
+              let decimals = 9;
+              if (symbol === "SUI") decimals = 9;
+              else if (symbol === "DEEP") decimals = 6;
+              else if (["USDC", "USDT"].includes(symbol)) decimals = 6;
+
+              const formattedAmount = (
+                Number(amount) / Math.pow(10, decimals)
+              ).toFixed(4);
+
+              balances[symbol] = formattedAmount;
+            }
+          }
+        } catch (err) {
+          console.error("Error fetching balance field:", err);
         }
+      }
 
-        setBmBalances(balances);
+      setBmBalances(balances);
+      if (Object.keys(balances).length > 0) {
+        addLog(
+          `  Balances fetched: ${Object.entries(balances)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(", ")}`,
+        );
       }
     } catch (error: any) {
       console.warn("Failed to fetch BM balances:", error);
+      setBmBalances({});
     } finally {
       setIsLoadingBalances(false);
     }
@@ -332,250 +449,139 @@ export default function LimitOrdersPage() {
     }
   }, [selectedPair, prices, triggerPrice]);
 
-  // Create Balance Manager
-  const handleCreateBalanceManager = useCallback(async () => {
-    if (!account?.address) {
-      addLog("[ERROR] Connect wallet first");
-      return;
-    }
+  // Fetch all available Balance Managers
+  const fetchAvailableBalanceManagers = useCallback(async () => {
+    if (!account?.address || !suiClient) return;
 
-    addLog("Creating Balance Manager...");
-    const tx = new Transaction();
-    tx.setSender(account.address);
-    tx.setGasBudget(100_000_000); // 0.1 SUI gas budget
-
+    setIsLoadingBalanceManagers(true);
     try {
-      const balanceManager = createBalanceManager({ tx, config });
+      // Use the same package ID as in the balance manager page
+      const BALANCE_MANAGER_PACKAGE =
+        "0xfb28c4cbc6865bd1c897d26aecbe1f8792d1509a20ffec692c800660cbec6982";
 
-      // Transfer to self (owner) - BalanceManager is an owned object initially
-      tx.transferObjects([balanceManager], tx.pure.address(account.address));
-
-      signAndExecute(
-        { transaction: tx as any },
-        {
-          onSuccess: async (result) => {
-            addLog(
-              `[OK] Balance Manager created! TX: ${result.digest.slice(0, 20)}...`,
-            );
-            addLog("Extracting Balance Manager ID from transaction...");
-
-            try {
-              // Wait for transaction to be confirmed and get full details
-              const txDetails = await suiClient.waitForTransaction({
-                digest: result.digest,
-                options: {
-                  showEffects: true,
-                  showObjectChanges: true,
-                  showEvents: true,
-                },
-              });
-
-              // Extract Balance Manager ID from created objects
-              let bmId: string | null = null;
-
-              // Method 1: From objectChanges (created objects)
-              if (txDetails.objectChanges) {
-                const createdBm = txDetails.objectChanges.find(
-                  (change: any) =>
-                    change.type === "created" &&
-                    change.objectType?.includes(
-                      "balance_manager::BalanceManager",
-                    ),
-                );
-                if (createdBm && "objectId" in createdBm) {
-                  bmId = createdBm.objectId;
-                }
-              }
-
-              // Method 2: From events (BalanceManagerEvent)
-              if (!bmId && txDetails.events) {
-                const bmEvent = txDetails.events.find((e: any) =>
-                  e.type?.includes("BalanceManagerEvent"),
-                );
-                if (bmEvent) {
-                  const parsed = bmEvent.parsedJson as any;
-                  if (parsed?.balance_manager_id) {
-                    bmId = parsed.balance_manager_id;
-                  }
-                }
-              }
-
-              // Method 3: From effects.created
-              if (!bmId && txDetails.effects?.created) {
-                const created = txDetails.effects.created[0];
-                if (created?.reference?.objectId) {
-                  bmId = created.reference.objectId;
-                }
-              }
-
-              if (bmId) {
-                setUserBalanceManagerId(bmId);
-                localStorage.setItem(
-                  `balance_manager_${network}_${account.address}`,
-                  bmId,
-                );
-                addLog(`[OK] Balance Manager ID: ${bmId}`);
-              } else {
-                addLog(
-                  "[WARN] Could not extract Balance Manager ID automatically",
-                );
-                addLog(
-                  "  Check your wallet for the new Balance Manager object",
-                );
-              }
-            } catch (waitError: any) {
-              addLog(
-                `[WARN] Could not verify transaction: ${waitError.message}`,
-              );
-              addLog(
-                "  The Balance Manager was likely created - check your wallet",
-              );
-            }
-          },
-          onError: (error) => {
-            addLog(`[ERROR] Failed: ${error.message}`);
-          },
+      const bmObjects = await suiClient.getOwnedObjects({
+        owner: account.address,
+        filter: {
+          StructType: `${BALANCE_MANAGER_PACKAGE}::balance_manager::BalanceManager`,
         },
-      );
-    } catch (error: any) {
-      addLog(`[ERROR] ${error.message}`);
-    }
-  }, [account, signAndExecute, addLog, suiClient]);
+        options: {
+          showContent: true,
+        },
+      });
 
-  // Set manual Balance Manager ID
-  const handleSetManualBmId = useCallback(() => {
-    if (!manualBmId || !account?.address) return;
+      const managers: Array<{ id: string; balances: Record<string, string> }> =
+        [];
 
-    setUserBalanceManagerId(manualBmId);
-    localStorage.setItem(
-      `balance_manager_${network}_${account.address}`,
-      manualBmId,
-    );
-    addLog(`[OK] Set Balance Manager: ${manualBmId.slice(0, 20)}...`);
-    setManualBmId("");
-  }, [manualBmId, account?.address, addLog]);
-
-  // Deposit to Balance Manager
-  const handleDeposit = useCallback(async () => {
-    if (!account?.address || !userBalanceManagerId) {
-      addLog("[ERROR] Need wallet and Balance Manager");
-      return;
-    }
-
-    const amount = parseFloat(depositAmount);
-    if (isNaN(amount) || amount <= 0) {
-      addLog("[ERROR] Invalid deposit amount");
-      return;
-    }
-
-    addLog(`Depositing ${amount} ${depositCoinType}...`);
-    const tx = new Transaction();
-    tx.setSender(account.address);
-    tx.setGasBudget(100_000_000); // 0.1 SUI gas budget
-
-    try {
-      // Get coin info from config
-      const coinInfo = config.coins[depositCoinType];
-      if (!coinInfo) {
-        addLog(
-          `[ERROR] Coin ${depositCoinType} not found in config. Available: ${Object.keys(config.coins).join(", ")}`,
-        );
-        return;
+      for (const bmObj of bmObjects.data) {
+        if (bmObj.data?.objectId) {
+          // Fetch balances for each balance manager
+          const balances = await fetchBmBalancesForId(bmObj.data.objectId);
+          managers.push({
+            id: bmObj.data.objectId,
+            balances,
+          });
+        }
       }
-      if (!coinInfo.scalar || typeof coinInfo.scalar !== "number") {
-        addLog(
-          `[ERROR] Invalid scalar for ${depositCoinType}: ${coinInfo.scalar}`,
-        );
-        return;
-      }
-      const coinType = coinInfo.type;
-      addLog(`  Coin type: ${coinType.slice(0, 30)}...`);
-      addLog(`  Scalar: ${coinInfo.scalar}`);
 
-      const amountUnits = BigInt(Math.floor(amount * coinInfo.scalar));
-      addLog(`  Amount in units: ${amountUnits.toString()}`);
+      setAvailableBalanceManagers(managers);
 
-      // For SUI, split from gas
-      if (depositCoinType === "SUI") {
-        const [depositCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountUnits)]);
-
-        depositToBalanceManager({
-          tx,
-          config,
-          balanceManagerId: userBalanceManagerId,
-          coinSymbol: depositCoinType,
-          coin: depositCoin,
-        });
+      if (managers.length > 0) {
+        addLog(`[OK] Found ${managers.length} Balance Manager(s)`);
       } else {
-        // For other coins, fetch and merge
-        const coins = await suiClient.getCoins({
-          owner: account.address,
-          coinType,
+        addLog("[INFO] No Balance Managers found");
+      }
+    } catch (error: any) {
+      console.warn("Failed to fetch balance managers:", error);
+      addLog(`[ERROR] Failed to fetch Balance Managers: ${error.message}`);
+    } finally {
+      setIsLoadingBalanceManagers(false);
+    }
+  }, [account?.address, suiClient, addLog]);
+
+  // Helper function to fetch balances for a specific balance manager ID
+  const fetchBmBalancesForId = useCallback(
+    async (bmId: string): Promise<Record<string, string>> => {
+      try {
+        const bmObject = await suiClient.getObject({
+          id: bmId,
+          options: { showContent: true },
         });
 
-        if (coins.data.length === 0) {
-          addLog(`[ERROR] No ${depositCoinType} coins found`);
-          return;
+        if (
+          !bmObject.data?.content ||
+          bmObject.data.content.dataType !== "moveObject"
+        ) {
+          return {};
         }
 
-        // Merge all coins into one
-        const coinIds = coins.data.map((c) => c.coinObjectId);
+        const fields = bmObject.data.content.fields as any;
+        const balances: Record<string, string> = {};
 
-        if (coinIds.length === 1) {
-          const [depositCoin] = tx.splitCoins(tx.object(coinIds[0]), [
-            tx.pure.u64(amountUnits),
-          ]);
-          depositToBalanceManager({
-            tx,
-            config,
-            balanceManagerId: userBalanceManagerId,
-            coinSymbol: depositCoinType,
-            coin: depositCoin,
-          });
-        } else {
-          const primaryCoin = tx.object(coinIds[0]);
-          tx.mergeCoins(
-            primaryCoin,
-            coinIds.slice(1).map((id) => tx.object(id)),
-          );
-          const [depositCoin] = tx.splitCoins(primaryCoin, [
-            tx.pure.u64(amountUnits),
-          ]);
-          depositToBalanceManager({
-            tx,
-            config,
-            balanceManagerId: userBalanceManagerId,
-            coinSymbol: depositCoinType,
-            coin: depositCoin,
-          });
+        // The balances are stored in a Table (dynamic field)
+        const balancesTableId = fields.balances?.fields?.id?.id;
+        if (!balancesTableId) {
+          return {};
         }
+
+        // Get dynamic fields of the balances table
+        const dynamicFields = await suiClient.getDynamicFields({
+          parentId: balancesTableId,
+        });
+
+        // Fetch each balance
+        for (const field of dynamicFields.data) {
+          try {
+            const fieldObject = await suiClient.getDynamicFieldObject({
+              parentId: balancesTableId,
+              name: (field as any).name,
+            });
+
+            if (
+              fieldObject.data?.content &&
+              fieldObject.data.content.dataType === "moveObject"
+            ) {
+              const fieldData = fieldObject.data.content.fields as any;
+              const coinType =
+                (field as any).name?.value?.name ||
+                (field as any).objectType?.split("<")[1]?.split(">")[0];
+              const amount = fieldData.value || "0";
+
+              if (coinType) {
+                const symbol = getCoinSymbol(coinType);
+
+                // Get decimals for proper formatting
+                let decimals = 9;
+                if (symbol === "SUI") decimals = 9;
+                else if (symbol === "DEEP") decimals = 6;
+                else if (["USDC", "USDT"].includes(symbol)) decimals = 6;
+
+                const formattedAmount = (
+                  Number(amount) / Math.pow(10, decimals)
+                ).toFixed(4);
+
+                balances[symbol] = formattedAmount;
+              }
+            }
+          } catch (err) {
+            console.error("Error fetching balance field:", err);
+          }
+        }
+
+        return balances;
+      } catch (error) {
+        console.warn(`Failed to fetch balances for ${bmId}:`, error);
+        return {};
       }
+    },
+    [suiClient],
+  );
 
-      signAndExecute(
-        { transaction: tx as any },
-        {
-          onSuccess: (result) => {
-            addLog(`[OK] Deposited ${amount} ${depositCoinType}`);
-            addLog(`TX: ${result.digest.slice(0, 20)}...`);
-            setDepositAmount("");
-          },
-          onError: (error) => {
-            addLog(`[ERROR] Deposit failed: ${error.message}`);
-          },
-        },
-      );
-    } catch (error: any) {
-      addLog(`[ERROR] ${error.message}`);
+  // Fetch all available balance managers on mount
+  useEffect(() => {
+    if (account?.address) {
+      fetchAvailableBalanceManagers();
     }
-  }, [
-    account,
-    userBalanceManagerId,
-    depositAmount,
-    depositCoinType,
-    signAndExecute,
-    addLog,
-    suiClient,
-  ]);
+  }, [account?.address, network, fetchAvailableBalanceManagers]);
 
   // Create limit order
   const handleCreateOrder = useCallback(async () => {
@@ -610,8 +616,32 @@ export default function LimitOrdersPage() {
       return;
     }
 
+    // Check balance before creating order
+    const baseCoinSymbol = poolInfo.baseCoin;
+    const quoteCoinSymbol = poolInfo.quoteCoin;
+
+    // For BUY: need QUOTE coin (price * quantity)
+    // For SELL: need BASE coin (quantity)
+    const requiredCoin = side === "buy" ? quoteCoinSymbol : baseCoinSymbol;
+    const requiredAmount = side === "buy" ? trigger * qty : qty;
+
+    const currentBalance = parseFloat(bmBalances[requiredCoin] || "0");
+
+    if (currentBalance < requiredAmount) {
+      addLog(
+        `[ERROR] Insufficient ${requiredCoin} balance. Need: ${requiredAmount.toFixed(4)}, Have: ${currentBalance.toFixed(4)}`,
+      );
+      addLog(
+        `  Go to Balance Manager to deposit ${requiredCoin} before placing orders`,
+      );
+      return;
+    }
+
     addLog(`Creating ${orderType} ${side} order...`);
     addLog(`  Pair: ${selectedPair}, Price: ${trigger}, Qty: ${qty}`);
+    addLog(
+      `  Required: ${requiredAmount.toFixed(4)} ${requiredCoin}, Available: ${currentBalance.toFixed(4)} ${requiredCoin}`,
+    );
 
     const tx = new Transaction();
     tx.setSender(account.address);
@@ -695,6 +725,11 @@ export default function LimitOrdersPage() {
             addLog(`  Order ID: ${clientOrderId.toString()}`);
 
             setTriggerPrice("");
+
+            // Refresh balances after order creation
+            setTimeout(() => {
+              fetchBmBalances();
+            }, 2000);
           },
           onError: (error) => {
             addLog(`[ERROR] Failed: ${error.message}`);
@@ -788,630 +823,823 @@ export default function LimitOrdersPage() {
 
   const currentPrice = prices[selectedPair] || 0;
   const availablePools = getAvailablePools();
+  const activeOrders = orders.filter(
+    (o) => o.status === "pending" || o.status === "triggered",
+  ).length;
+  const filledOrders = orders.filter((o) => o.status === "filled").length;
 
   return (
-    <div className="min-h-screen w-full bg-background text-foreground">
-      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-xl sm:text-2xl font-bold text-foreground mb-1">
-              Limit Orders
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              DeepBook V3 on-chain limit orders
-            </p>
+    <div className="min-h-screen bg-background">
+      {/* Mobile Overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside
+        className={`fixed left-0 top-0 h-screen bg-background border-r border-border transition-all duration-300 z-40 ${
+          sidebarOpen ? "w-80 min-w-80" : "w-0"
+        } overflow-hidden`}
+      >
+        <ScrollArea className="h-full">
+          <div className="p-6">
+            {/* Logo/Title */}
+            <div className="mb-6">
+              <h2 className="font-semibold text-foreground text-lg">
+                Limit Orders
+              </h2>
+              <Badge variant="secondary" className="mt-2">
+                {activeOrders} active
+              </Badge>
+            </div>
+
+            <Separator className="mb-4" />
+
+            {/* Navigation */}
+            <div className="mb-6">
+              <h3 className="text-xs font-semibold text-foreground mb-3 uppercase tracking-wide">
+                Navigation
+              </h3>
+              <div className="space-y-1">
+                <Link
+                  href="/trade"
+                  className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 px-2 py-2 rounded-md transition-all duration-200 group"
+                >
+                  <Home className="w-4 h-4 text-muted-foreground/70 group-hover:text-primary transition-colors" />
+                  Trade Home
+                </Link>
+                <Link
+                  href="/trade/swap"
+                  className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 px-2 py-2 rounded-md transition-all duration-200 group"
+                >
+                  <TrendingUp className="w-4 h-4 text-muted-foreground/70 group-hover:text-primary transition-colors" />
+                  Swap
+                </Link>
+                <Link
+                  href="/trade/balance-manager"
+                  className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 px-2 py-2 rounded-md transition-all duration-200 group"
+                >
+                  <Wallet className="w-4 h-4 text-muted-foreground/70 group-hover:text-primary transition-colors" />
+                  Balance Manager
+                </Link>
+                <Link
+                  href="/trade/flash-arbitrage"
+                  className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 px-2 py-2 rounded-md transition-all duration-200 group"
+                >
+                  <Zap className="w-4 h-4 text-muted-foreground/70 group-hover:text-primary transition-colors" />
+                  Flash Arbitrage
+                </Link>
+              </div>
+            </div>
+
+            <Separator className="mb-4" />
+
+            {/* Balance Managers List */}
+            <div className="mb-4">
+              <h3 className="text-xs font-semibold text-foreground mb-3 uppercase tracking-wide">
+                Balance Managers
+              </h3>
+              {isLoadingBalanceManagers ? (
+                <div className="flex flex-col items-center justify-center py-8 space-y-2">
+                  <Loader2 className="w-6 h-6 text-primary animate-spin" />
+                  <p className="text-xs text-muted-foreground">
+                    Loading managers...
+                  </p>
+                </div>
+              ) : availableBalanceManagers.length === 0 ? (
+                <div className="p-3 bg-destructive/5 border border-destructive/20 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <AlertCircle className="w-4 h-4 text-destructive" />
+                    <span className="text-sm font-medium text-destructive">
+                      No Managers
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Create a balance manager to start trading
+                  </p>
+                  <Link href="/trade/balance-manager">
+                    <Button size="sm" className="w-full text-xs">
+                      <Plus className="w-3 h-3 mr-1" />
+                      Create One
+                    </Button>
+                  </Link>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {availableBalanceManagers.map((manager, index) => (
+                    <button
+                      key={manager.id}
+                      onClick={() => {
+                        setSelectedManagerIndex(index);
+                        setUserBalanceManagerId(manager.id);
+                        localStorage.setItem(
+                          `balance_manager_${network}_${account?.address}`,
+                          manager.id,
+                        );
+                        addLog(`[OK] Switched to Manager ${index + 1}`);
+                        // Auto-close sidebar on mobile after selection
+                        if (window.innerWidth < 1024) {
+                          setSidebarOpen(false);
+                        }
+                      }}
+                      className={`w-full p-3 rounded-lg border-2 transition-all text-left ${
+                        index === selectedManagerIndex
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/50 hover:bg-accent"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Wallet className="w-4 h-4 text-primary" />
+                          <span className="text-sm font-semibold text-foreground">
+                            Manager {index + 1}
+                          </span>
+                        </div>
+                        {index === selectedManagerIndex && (
+                          <CheckCircle2 className="w-4 h-4 text-primary" />
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground font-mono truncate mb-2">
+                        {manager.id.slice(0, 8)}...{manager.id.slice(-6)}
+                      </p>
+                      {manager.balances &&
+                      Object.keys(manager.balances).length > 0 ? (
+                        <div className="space-y-1 mt-2 pt-2 border-t border-border/50">
+                          {Object.entries(manager.balances).map(
+                            ([symbol, amount]) => (
+                              <div
+                                key={symbol}
+                                className="flex items-center justify-between text-xs"
+                              >
+                                <span className="text-muted-foreground font-medium">
+                                  {symbol}
+                                </span>
+                                <span className="text-foreground font-mono">
+                                  {amount}
+                                </span>
+                              </div>
+                            ),
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground/60 mt-2 pt-2 border-t border-border/50">
+                          No deposits yet
+                        </p>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <Separator className="mb-4" />
+
+            {/* Quick Stats */}
+            <div className="mb-4">
+              <h3 className="text-xs font-semibold text-foreground mb-3 uppercase tracking-wide">
+                Quick Stats
+              </h3>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-muted-foreground">Active Orders</span>
+                  <span className="font-medium">{activeOrders}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-muted-foreground">Filled Orders</span>
+                  <span className="font-medium">{filledOrders}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-muted-foreground">Network</span>
+                  <Badge variant="outline" className="text-xs">
+                    {network.toUpperCase()}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+
+            {isMainnet && (
+              <div className="mt-2 p-2 bg-destructive/10 border border-destructive/20 rounded text-xs text-destructive">
+                Real funds mode
+              </div>
+            )}
           </div>
-          <div className="flex items-center gap-3">
-            <NetworkToggle compact />
-            <Link
-              href="/trade"
-              className="px-3 py-1.5 bg-muted hover:bg-muted rounded-lg text-sm"
-            >
-              Back
-            </Link>
+        </ScrollArea>
+      </aside>
+
+      {/* Main Content */}
+      <div
+        className={`transition-all duration-300 ${
+          sidebarOpen ? "lg:ml-80" : "ml-0"
+        }`}
+      >
+        <div className="sticky top-0 z-50 bg-background/80 backdrop-blur-sm border-b border-border">
+          <div className="px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="shrink-0"
+              >
+                {sidebarOpen ? (
+                  <>
+                    <PanelLeftClose className="w-4 h-4" />
+                    <span className="ml-2 hidden sm:inline">Close</span>
+                  </>
+                ) : (
+                  <>
+                    <PanelLeftOpen className="w-4 h-4" />
+                    <span className="ml-2 hidden sm:inline">Menu</span>
+                  </>
+                )}
+              </Button>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base sm:text-lg font-semibold text-foreground">
+                  Limit Orders
+                </h2>
+                <Badge variant="outline" className="text-xs">
+                  DeepBook V3
+                </Badge>
+              </div>
+            </div>
+
+            {/* Wallet Status */}
+            <div className="flex items-center gap-2">
+              <NetworkToggle />
+              {account ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="gap-2">
+                      <Wallet className="w-4 h-4" />
+                      <span className="hidden sm:inline">
+                        {account.address.slice(0, 6)}...
+                        {account.address.slice(-4)}
+                      </span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuLabel>Wallet</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem className="font-mono text-xs">
+                      {account.address}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <ConnectButton />
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Mainnet Warning */}
-        {isMainnet && (
-          <div className="mb-6 p-4 bg-chart-3/10 border border-chart-3/20 rounded-xl">
-            <p className="text-chart-3 text-sm font-medium">
-              Mainnet Mode - Real funds will be used for orders
-            </p>
-          </div>
-        )}
+        <div className="px-4 sm:px-6 lg:px-8 py-6">
+          {/* Main Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5">
+            {/* Order Form */}
+            <div className="lg:col-span-3 space-y-4">
+              <div className="bg-muted/50 rounded-lg p-4 border border-border">
+                <h2 className="text-base font-semibold text-muted-foreground mb-4">
+                  Create Order
+                </h2>
 
-        {/* Balance Manager Section */}
-        <div className="bg-muted/50 rounded-lg p-4 sm:p-5 border border-border mb-6">
-          <h2 className="text-base font-semibold text-muted-foreground mb-3">
-            Balance Manager
-          </h2>
+                {/* Pair Selection */}
+                <div className="mb-4">
+                  <label className="block text-sm text-muted-foreground mb-1.5">
+                    Trading Pair
+                  </label>
+                  <select
+                    value={selectedPair}
+                    onChange={(e) => {
+                      setSelectedPair(e.target.value);
+                      setTriggerPrice("");
+                    }}
+                    className="w-full px-3 py-2 bg-background rounded-lg border border-border focus:border-primary outline-none text-sm"
+                  >
+                    {availablePools.map((pair) => (
+                      <option key={pair} value={pair}>
+                        {pair.replace("_", "/")}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-          {userBalanceManagerId ? (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-chart-2 text-sm font-medium">Active</span>
-                <code className="text-primary text-xs bg-muted px-2 py-1 rounded break-all flex-1 min-w-0">
-                  {userBalanceManagerId.slice(0, 20)}...
-                  {userBalanceManagerId.slice(-8)}
-                </code>
-                <Button
-                  type="button"
-                  onClick={handleClearBalanceManager}
-                  className="px-2 py-1 bg-destructive hover:bg-destructive rounded text-xs"
-                >
-                  Clear
-                </Button>
-              </div>
+                {/* Current Price Display */}
+                <div className="mb-4 p-3 bg-background rounded-lg border border-border">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-muted-foreground">
+                      Current Price
+                    </span>
+                    <span className="w-2 h-2 bg-primary rounded-full animate-pulse" />
+                  </div>
+                  <p className="font-mono text-lg text-primary mt-1">
+                    {currentPrice.toFixed(6)}
+                  </p>
+                </div>
 
-              {/* Important Deposit Warning */}
-              <div className="bg-chart-3/30 border border-chart-3 rounded p-2.5">
-                <p className="text-chart-3 text-xs font-medium">
-                  Deposit funds BEFORE placing orders
-                </p>
-                <p className="text-chart-3/70 text-xs mt-1">
-                  Buy = QUOTE coin | Sell = BASE coin
-                </p>
-              </div>
+                {/* Order Type */}
+                <div className="mb-4">
+                  <label className="block text-sm text-muted-foreground mb-1.5">
+                    Order Type
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(["limit", "stop-loss", "take-profit"] as const).map(
+                      (type) => (
+                        <Button
+                          key={type}
+                          type="button"
+                          onClick={() => setOrderType(type)}
+                          className={`py-2 px-2 rounded-lg text-xs font-medium transition-colors ${
+                            orderType === type
+                              ? "bg-primary text-foreground"
+                              : "bg-muted text-muted-foreground hover:bg-muted"
+                          }`}
+                        >
+                          {type === "limit"
+                            ? "Limit"
+                            : type === "stop-loss"
+                              ? "Stop"
+                              : "TP"}
+                        </Button>
+                      ),
+                    )}
+                  </div>
+                </div>
 
-              {/* Deposit Section */}
-              <div className="flex flex-wrap gap-2 items-end">
-                <div className="flex-1 min-w-[100px]">
-                  <label className="block text-xs text-muted-foreground mb-1">
-                    Amount
+                {/* Side */}
+                <div className="mb-4">
+                  <label className="block text-sm text-muted-foreground mb-1.5">
+                    Side
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      type="button"
+                      onClick={() => setSide("buy")}
+                      className={`py-2 rounded-lg text-sm font-medium transition-colors ${
+                        side === "buy"
+                          ? "bg-chart-2 text-foreground"
+                          : "bg-muted text-muted-foreground hover:bg-muted"
+                      }`}
+                    >
+                      Buy
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => setSide("sell")}
+                      className={`py-2 rounded-lg text-sm font-medium transition-colors ${
+                        side === "sell"
+                          ? "bg-destructive text-foreground"
+                          : "bg-muted text-muted-foreground hover:bg-muted"
+                      }`}
+                    >
+                      Sell
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Trigger Price */}
+                <div className="mb-4">
+                  <label className="block text-sm text-muted-foreground mb-1.5">
+                    {orderType === "limit"
+                      ? "Limit Price"
+                      : orderType === "stop-loss"
+                        ? "Stop Price"
+                        : "Target Price"}
                   </label>
                   <input
                     type="number"
-                    value={depositAmount}
-                    onChange={(e) => setDepositAmount(e.target.value)}
-                    placeholder="0.5"
-                    className="w-full px-2.5 py-1.5 bg-background rounded border border-border text-sm"
+                    value={triggerPrice}
+                    onChange={(e) => setTriggerPrice(e.target.value)}
+                    step="0.000001"
+                    placeholder={currentPrice.toFixed(6)}
+                    className="w-full px-3 py-2 bg-background rounded-lg border border-border focus:border-primary outline-none text-sm"
                   />
-                </div>
-                <div>
-                  <label className="block text-xs text-muted-foreground mb-1">
-                    Coin
-                  </label>
-                  <select
-                    value={depositCoinType}
-                    onChange={(e) => setDepositCoinType(e.target.value)}
-                    className="px-2.5 py-1.5 bg-background rounded border border-border text-sm"
-                  >
-                    <option value="SUI">SUI</option>
-                    <option value="DEEP">DEEP</option>
-                    <option value="DBUSDC">DBUSDC</option>
-                  </select>
-                </div>
-                <Button
-                  type="button"
-                  onClick={handleDeposit}
-                  disabled={isPending || !depositAmount}
-                  className="px-3 py-1.5 bg-chart-2 hover:bg-chart-2 rounded text-sm disabled:opacity-50"
-                >
-                  Deposit
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                No Balance Manager found. Create one or enter ID:
-              </p>
 
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  onClick={handleCreateBalanceManager}
-                  disabled={isPending || !account}
-                  className="px-3 py-1.5 bg-primary hover:bg-primary rounded text-sm disabled:opacity-50"
-                >
-                  Create Balance Manager
-                </Button>
-
-                <div className="flex gap-2 flex-1 min-w-[200px]">
-                  <input
-                    type="text"
-                    value={manualBmId}
-                    onChange={(e) => setManualBmId(e.target.value)}
-                    placeholder="0x..."
-                    className="flex-1 px-2.5 py-1.5 bg-background rounded border border-border text-sm"
-                  />
-                  <Button
-                    type="button"
-                    onClick={handleSetManualBmId}
-                    disabled={!manualBmId}
-                    className="px-3 py-1.5 bg-muted hover:bg-muted rounded text-sm disabled:opacity-50"
-                  >
-                    Set
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Main Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5">
-          {/* Order Form */}
-          <div className="lg:col-span-3 space-y-4">
-            <div className="bg-muted/50 rounded-lg p-4 border border-border">
-              <h2 className="text-base font-semibold text-muted-foreground mb-4">
-                Create Order
-              </h2>
-
-              {/* Pair Selection */}
-              <div className="mb-4">
-                <label className="block text-sm text-muted-foreground mb-1.5">
-                  Trading Pair
-                </label>
-                <select
-                  value={selectedPair}
-                  onChange={(e) => {
-                    setSelectedPair(e.target.value);
-                    setTriggerPrice("");
-                  }}
-                  className="w-full px-3 py-2 bg-background rounded-lg border border-border focus:border-primary outline-none text-sm"
-                >
-                  {availablePools.map((pair) => (
-                    <option key={pair} value={pair}>
-                      {pair.replace("_", "/")}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Current Price Display */}
-              <div className="mb-4 p-3 bg-background rounded-lg border border-border">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-muted-foreground">
-                    Current Price
-                  </span>
-                  <span className="w-2 h-2 bg-primary rounded-full animate-pulse" />
-                </div>
-                <p className="font-mono text-lg text-primary mt-1">
-                  {currentPrice.toFixed(6)}
-                </p>
-              </div>
-
-              {/* Order Type */}
-              <div className="mb-4">
-                <label className="block text-sm text-muted-foreground mb-1.5">
-                  Order Type
-                </label>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {(["limit", "stop-loss", "take-profit"] as const).map(
-                    (type) => (
-                      <Button
-                        key={type}
-                        type="button"
-                        onClick={() => setOrderType(type)}
-                        className={`py-2 px-2 rounded-lg text-xs font-medium transition-colors ${
-                          orderType === type
-                            ? "bg-primary text-foreground"
-                            : "bg-muted text-muted-foreground hover:bg-muted"
-                        }`}
-                      >
-                        {type === "limit"
-                          ? "Limit"
-                          : type === "stop-loss"
-                            ? "Stop"
-                            : "TP"}
-                      </Button>
-                    ),
+                  {/* Price hint */}
+                  {triggerPrice && currentPrice > 0 && (
+                    <p className="text-sm mt-2 text-muted-foreground">
+                      {parseFloat(triggerPrice) > currentPrice
+                        ? `${((parseFloat(triggerPrice) / currentPrice - 1) * 100).toFixed(2)}% above current`
+                        : `${((1 - parseFloat(triggerPrice) / currentPrice) * 100).toFixed(2)}% below current`}
+                    </p>
                   )}
                 </div>
-              </div>
 
-              {/* Side */}
-              <div className="mb-4">
-                <label className="block text-sm text-muted-foreground mb-1.5">
-                  Side
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    type="button"
-                    onClick={() => setSide("buy")}
-                    className={`py-2 rounded-lg text-sm font-medium transition-colors ${
-                      side === "buy"
-                        ? "bg-chart-2 text-foreground"
-                        : "bg-muted text-muted-foreground hover:bg-muted"
-                    }`}
-                  >
-                    Buy
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => setSide("sell")}
-                    className={`py-2 rounded-lg text-sm font-medium transition-colors ${
-                      side === "sell"
-                        ? "bg-destructive text-foreground"
-                        : "bg-muted text-muted-foreground hover:bg-muted"
-                    }`}
-                  >
-                    Sell
-                  </Button>
+                {/* Quantity */}
+                <div className="mb-4">
+                  <label className="block text-sm text-muted-foreground mb-1.5">
+                    Quantity ({selectedPair.split("_")[0]})
+                  </label>
+                  <input
+                    type="number"
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                    min="0.01"
+                    step="1"
+                    className="w-full px-3 py-2 bg-background rounded-lg border border-border focus:border-primary outline-none text-sm"
+                  />
                 </div>
-              </div>
 
-              {/* Trigger Price */}
-              <div className="mb-4">
-                <label className="block text-sm text-muted-foreground mb-1.5">
-                  {orderType === "limit"
-                    ? "Limit Price"
-                    : orderType === "stop-loss"
-                      ? "Stop Price"
-                      : "Target Price"}
-                </label>
-                <input
-                  type="number"
-                  value={triggerPrice}
-                  onChange={(e) => setTriggerPrice(e.target.value)}
-                  step="0.000001"
-                  placeholder={currentPrice.toFixed(6)}
-                  className="w-full px-3 py-2 bg-background rounded-lg border border-border focus:border-primary outline-none text-sm"
-                />
-
-                {/* Price hint */}
-                {triggerPrice && currentPrice > 0 && (
-                  <p className="text-sm mt-2 text-muted-foreground">
-                    {parseFloat(triggerPrice) > currentPrice
-                      ? `${((parseFloat(triggerPrice) / currentPrice - 1) * 100).toFixed(2)}% above current`
-                      : `${((1 - parseFloat(triggerPrice) / currentPrice) * 100).toFixed(2)}% below current`}
+                {/* Order Summary */}
+                <div className="mb-3 p-3 bg-primary/10 border border-primary/20 rounded-lg">
+                  <p className="text-xs text-muted-foreground">
+                    Order Summary:
                   </p>
-                )}
-              </div>
-
-              {/* Quantity */}
-              <div className="mb-4">
-                <label className="block text-sm text-muted-foreground mb-1.5">
-                  Quantity ({selectedPair.split("_")[0]})
-                </label>
-                <input
-                  type="number"
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
-                  min="0.01"
-                  step="1"
-                  className="w-full px-3 py-2 bg-background rounded-lg border border-border focus:border-primary outline-none text-sm"
-                />
-              </div>
-
-              {/* Order Summary */}
-              <div className="mb-3 p-3 bg-primary/10 border border-primary/20 rounded-lg">
-                <p className="text-xs text-muted-foreground">Order Summary:</p>
-                <p className="mt-1.5 font-medium text-sm text-primary">
-                  {side === "buy" ? "Buy" : "Sell"} {quantity}{" "}
-                  {selectedPair.split("_")[0]} @ {triggerPrice || "..."}{" "}
-                  {selectedPair.split("_")[1]}
-                </p>
-                {triggerPrice && quantity && (
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Total: ~
-                    {(parseFloat(triggerPrice) * parseFloat(quantity)).toFixed(
-                      4,
-                    )}{" "}
+                  <p className="mt-1.5 font-medium text-sm text-primary">
+                    {side === "buy" ? "Buy" : "Sell"} {quantity}{" "}
+                    {selectedPair.split("_")[0]} @ {triggerPrice || "..."}{" "}
                     {selectedPair.split("_")[1]}
                   </p>
-                )}
-              </div>
-
-              {/* Deposit Requirement Warning */}
-              {userBalanceManagerId && (
-                <div className="mb-4 p-3 bg-amber-900/30 border border-amber-700/50 rounded-lg">
-                  <p className="text-amber-400 text-xs font-medium">
-                    Required deposit for this order:
-                  </p>
-                  {side === "buy" ? (
-                    <p className="text-amber-300/80 text-xs mt-1">
-                      {triggerPrice && quantity
-                        ? `~${(parseFloat(triggerPrice) * parseFloat(quantity)).toFixed(4)} ${selectedPair.split("_")[1]} (Quote coin)`
-                        : `${selectedPair.split("_")[1]} (Quote coin)`}
-                    </p>
-                  ) : (
-                    <p className="text-amber-300/80 text-xs mt-1">
-                      {quantity
-                        ? `~${quantity} ${selectedPair.split("_")[0]} (Base coin)`
-                        : `${selectedPair.split("_")[0]} (Base coin)`}
+                  {triggerPrice && quantity && (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Total: ~
+                      {(
+                        parseFloat(triggerPrice) * parseFloat(quantity)
+                      ).toFixed(4)}{" "}
+                      {selectedPair.split("_")[1]}
                     </p>
                   )}
                 </div>
-              )}
 
-              {/* Create Button */}
-              <Button
-                type="button"
-                onClick={handleCreateOrder}
-                disabled={isPending || !account || !userBalanceManagerId}
-                className="w-full py-3 bg-primary hover:bg-primary rounded-lg font-semibold text-sm transition-colors disabled:opacity-50"
-              >
-                {isPending ? "Creating..." : "Create Order"}
-              </Button>
+                {/* Balance Display */}
+                {userBalanceManagerId && Object.keys(bmBalances).length > 0 && (
+                  <div className="mb-4 p-3 bg-background rounded-lg border border-border">
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Your Balance Manager:
+                    </p>
+                    <div className="space-y-1">
+                      {Object.entries(bmBalances).map(([coin, amount]) => {
+                        const isRequiredCoin =
+                          (side === "buy" &&
+                            coin === selectedPair.split("_")[1]) ||
+                          (side === "sell" &&
+                            coin === selectedPair.split("_")[0]);
+                        const requiredAmount =
+                          side === "buy"
+                            ? parseFloat(triggerPrice || "0") *
+                              parseFloat(quantity || "0")
+                            : parseFloat(quantity || "0");
+                        const hasEnough = parseFloat(amount) >= requiredAmount;
 
-              {!account && (
-                <p className="text-center text-muted-foreground mt-3 text-sm">
-                  Connect wallet to create orders
-                </p>
-              )}
-              {account && !userBalanceManagerId && (
-                <p className="text-center text-amber-500 mt-3 text-sm">
-                  Create or set Balance Manager first
-                </p>
-              )}
-            </div>
+                        return (
+                          <div
+                            key={coin}
+                            className={`flex items-center justify-between text-xs py-1 px-2 rounded ${
+                              isRequiredCoin
+                                ? hasEnough
+                                  ? "bg-chart-2/10 text-chart-2 border border-chart-2/20"
+                                  : "bg-destructive/10 text-destructive border border-destructive/20"
+                                : ""
+                            }`}
+                          >
+                            <span className="font-medium">{coin}</span>
+                            <span className="font-mono">
+                              {amount}
+                              {isRequiredCoin && requiredAmount > 0 && (
+                                <span className="ml-1 text-muted-foreground">
+                                  / {requiredAmount.toFixed(4)}
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {isLoadingBalances && (
+                      <p className="text-xs text-muted-foreground mt-2 flex items-center gap-2">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Updating balances...
+                      </p>
+                    )}
+                  </div>
+                )}
 
-            {/* Quick Example */}
-            <div className="bg-muted/50 rounded-lg p-3 border border-border">
-              <h3 className="text-sm font-semibold text-muted-foreground mb-2">
-                Example Orders
-              </h3>
-              <div className="space-y-1.5 text-xs text-muted-foreground">
-                <p>
-                  • <strong>DEEP_SUI</strong>: Buy 10 DEEP @ 0.024 SUI = 0.24
-                  SUI
-                </p>
-                <p>
-                  • <strong>SUI_USDC</strong>: Sell 1 SUI @ 4.5 USDC = 4.5 USDC
-                </p>
-                <p className="text-amber-400 mt-2">
-                  Deposit funds to Balance Manager before trading!
-                </p>
+                {/* Deposit Requirement Warning */}
+                {userBalanceManagerId && (
+                  <div className="mb-4 p-3 bg-chart-3/10 border border-chart-3/20 rounded-lg">
+                    <p className="text-chart-3 text-xs font-medium">
+                      Required deposit for this order:
+                    </p>
+                    {side === "buy" ? (
+                      <p className="text-chart-3/80 text-xs mt-1">
+                        {triggerPrice && quantity
+                          ? `~${(parseFloat(triggerPrice) * parseFloat(quantity)).toFixed(4)} ${selectedPair.split("_")[1]} (Quote coin)`
+                          : `${selectedPair.split("_")[1]} (Quote coin)`}
+                      </p>
+                    ) : (
+                      <p className="text-chart-3/80 text-xs mt-1">
+                        {quantity
+                          ? `~${quantity} ${selectedPair.split("_")[0]} (Base coin)`
+                          : `${selectedPair.split("_")[0]} (Base coin)`}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Create Button */}
+                <Button
+                  type="button"
+                  onClick={handleCreateOrder}
+                  disabled={isPending || !account || !userBalanceManagerId}
+                  className="w-full py-3 bg-primary hover:bg-primary rounded-lg font-semibold text-sm transition-colors disabled:opacity-50"
+                >
+                  {isPending ? "Creating..." : "Create Order"}
+                </Button>
+
+                {!account && (
+                  <p className="text-center text-muted-foreground mt-3 text-sm">
+                    Connect wallet to create orders
+                  </p>
+                )}
+                {account && !userBalanceManagerId && (
+                  <p className="text-center text-chart-3 mt-3 text-sm">
+                    Create or set Balance Manager first
+                  </p>
+                )}
               </div>
-            </div>
-          </div>
 
-          {/* Orders Table */}
-          <div className="lg:col-span-5">
-            <div className="bg-muted/50 rounded-lg p-4 sm:p-5 border border-border h-full">
-              <h2 className="text-base font-semibold text-muted-foreground mb-4">
-                Active Orders
-              </h2>
-
-              {orders.filter(
-                (o) => o.status === "pending" || o.status === "triggered",
-              ).length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  <p className="font-semibold text-base">No active orders</p>
-                  <p className="mt-1.5 text-sm">
-                    Create an order to get started
+              {/* Quick Example */}
+              <div className="bg-muted/50 rounded-lg p-3 border border-border">
+                <h3 className="text-sm font-semibold text-muted-foreground mb-2">
+                  Example Orders
+                </h3>
+                <div className="space-y-1.5 text-xs text-muted-foreground">
+                  <p>
+                    • <strong>DEEP_SUI</strong>: Buy 10 DEEP @ 0.024 SUI = 0.24
+                    SUI
+                  </p>
+                  <p>
+                    • <strong>SUI_USDC</strong>: Sell 1 SUI @ 4.5 USDC = 4.5
+                    USDC
+                  </p>
+                  <p className="text-chart-3 mt-2">
+                    Deposit funds to Balance Manager before trading!
                   </p>
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  {orders
-                    .filter(
-                      (o) => o.status === "pending" || o.status === "triggered",
-                    )
-                    .map((order) => {
-                      const pairPrice = prices[order.pair] || 0;
-                      const distance =
-                        pairPrice > 0
-                          ? (
-                              (order.triggerPrice / pairPrice - 1) *
-                              100
-                            ).toFixed(2)
-                          : "0";
+              </div>
+            </div>
 
-                      return (
-                        <div
-                          key={order.id}
-                          className={`p-3 rounded-lg border ${
-                            order.status === "triggered"
-                              ? "border-green-500/50 bg-chart-2/5"
-                              : "border-border bg-background"
-                          }`}
-                        >
-                          <div className="flex justify-between items-start mb-2">
-                            <div className="flex items-center gap-1.5">
+            {/* Orders Table */}
+            <div className="lg:col-span-5">
+              <div className="bg-muted/50 rounded-lg p-4 sm:p-5 border border-border h-full">
+                <h2 className="text-base font-semibold text-muted-foreground mb-4">
+                  Active Orders
+                </h2>
+
+                {orders.filter(
+                  (o) => o.status === "pending" || o.status === "triggered",
+                ).length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <p className="font-semibold text-base">No active orders</p>
+                    <p className="mt-1.5 text-sm">
+                      Create an order to get started
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {orders
+                      .filter(
+                        (o) =>
+                          o.status === "pending" || o.status === "triggered",
+                      )
+                      .map((order) => {
+                        const pairPrice = prices[order.pair] || 0;
+                        const distance =
+                          pairPrice > 0
+                            ? (
+                                (order.triggerPrice / pairPrice - 1) *
+                                100
+                              ).toFixed(2)
+                            : "0";
+
+                        return (
+                          <div
+                            key={order.id}
+                            className={`p-3 rounded-lg border ${
+                              order.status === "triggered"
+                                ? "border-green-500/50 bg-chart-2/5"
+                                : "border-border bg-background"
+                            }`}
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                    order.type === "limit"
+                                      ? "bg-primary/10 text-primary"
+                                      : order.type === "stop-loss"
+                                        ? "bg-destructive/10 text-destructive"
+                                        : "bg-chart-2/10 text-chart-2"
+                                  }`}
+                                >
+                                  {order.type}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                    order.side === "buy"
+                                      ? "bg-chart-2/10 text-chart-2"
+                                      : "bg-destructive/10 text-destructive"
+                                  }`}
+                                >
+                                  {order.side}
+                                </span>
+                              </div>
                               <span
-                                className={`px-2 py-0.5 rounded text-xs font-medium ${
-                                  order.type === "limit"
-                                    ? "bg-primary/10 text-primary"
-                                    : order.type === "stop-loss"
-                                      ? "bg-destructive/10 text-destructive"
-                                      : "bg-chart-2/10 text-chart-2"
+                                className={`text-xs font-medium ${
+                                  order.status === "triggered"
+                                    ? "text-chart-2"
+                                    : "text-muted-foreground"
                                 }`}
                               >
-                                {order.type}
-                              </span>
-                              <span
-                                className={`px-2 py-0.5 rounded text-xs font-medium ${
-                                  order.side === "buy"
-                                    ? "bg-chart-2/10 text-chart-2"
-                                    : "bg-destructive/10 text-destructive"
-                                }`}
-                              >
-                                {order.side}
+                                {order.status === "triggered"
+                                  ? "TRIGGERED"
+                                  : "On-chain"}
                               </span>
                             </div>
+
+                            <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
+                              <div>
+                                <span className="text-muted-foreground">
+                                  Pair:
+                                </span>
+                                <span className="ml-1.5 font-medium text-foreground">
+                                  {order.pair.replace("_", "/")}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">
+                                  Qty:
+                                </span>
+                                <span className="ml-1.5 font-mono text-muted-foreground">
+                                  {order.quantity}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">
+                                  Price:
+                                </span>
+                                <span className="ml-1.5 font-mono text-primary">
+                                  {order.triggerPrice.toFixed(6)}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">
+                                  Current:
+                                </span>
+                                <span className="ml-1.5 font-mono text-muted-foreground">
+                                  {pairPrice.toFixed(6)}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Order ID */}
+                            {order.onChainOrderId && (
+                              <div className="mb-2 text-xs text-muted-foreground">
+                                ID: {order.onChainOrderId.toString()}
+                              </div>
+                            )}
+
+                            {/* Distance to trigger */}
+                            {order.status === "pending" && (
+                              <div className="mb-3">
+                                <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                                  <span>Distance</span>
+                                  <span>{distance}%</span>
+                                </div>
+                                <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-primary transition-all"
+                                    style={{
+                                      width: `${Math.max(0, Math.min(100, 100 - Math.abs(parseFloat(distance))))}%`,
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                onClick={() => handleCancelOrder(order)}
+                                disabled={isPending}
+                                className="flex-1 py-2 text-sm bg-muted hover:bg-muted rounded-lg transition-colors disabled:opacity-50"
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+
+                {/* Order History */}
+                {orders.filter(
+                  (o) => o.status === "filled" || o.status === "cancelled",
+                ).length > 0 && (
+                  <div className="mt-5">
+                    <h3 className="text-sm font-medium mb-2 text-muted-foreground">
+                      History
+                    </h3>
+                    <div className="space-y-2">
+                      {orders
+                        .filter(
+                          (o) =>
+                            o.status !== "pending" && o.status !== "triggered",
+                        )
+                        .slice(-5)
+                        .map((order) => (
+                          <div
+                            key={order.id}
+                            className="flex justify-between items-center p-2.5 bg-background rounded-lg text-xs"
+                          >
+                            <span className="text-muted-foreground">
+                              {order.type} {order.side} {order.quantity}{" "}
+                              {order.pair.replace("_", "/")}
+                            </span>
                             <span
-                              className={`text-xs font-medium ${
-                                order.status === "triggered"
+                              className={`${
+                                order.status === "filled"
                                   ? "text-chart-2"
                                   : "text-muted-foreground"
                               }`}
                             >
-                              {order.status === "triggered"
-                                ? "TRIGGERED"
-                                : "On-chain"}
+                              {order.status === "filled"
+                                ? "Filled"
+                                : "Cancelled"}
                             </span>
                           </div>
-
-                          <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
-                            <div>
-                              <span className="text-muted-foreground">
-                                Pair:
-                              </span>
-                              <span className="ml-1.5 font-medium text-foreground">
-                                {order.pair.replace("_", "/")}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">
-                                Qty:
-                              </span>
-                              <span className="ml-1.5 font-mono text-muted-foreground">
-                                {order.quantity}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">
-                                Price:
-                              </span>
-                              <span className="ml-1.5 font-mono text-primary">
-                                {order.triggerPrice.toFixed(6)}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">
-                                Current:
-                              </span>
-                              <span className="ml-1.5 font-mono text-muted-foreground">
-                                {pairPrice.toFixed(6)}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Order ID */}
-                          {order.onChainOrderId && (
-                            <div className="mb-2 text-xs text-muted-foreground">
-                              ID: {order.onChainOrderId.toString()}
-                            </div>
-                          )}
-
-                          {/* Distance to trigger */}
-                          {order.status === "pending" && (
-                            <div className="mb-3">
-                              <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                                <span>Distance</span>
-                                <span>{distance}%</span>
-                              </div>
-                              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                                <div
-                                  className="h-full bg-primary transition-all"
-                                  style={{
-                                    width: `${Math.max(0, Math.min(100, 100 - Math.abs(parseFloat(distance))))}%`,
-                                  }}
-                                />
-                              </div>
-                            </div>
-                          )}
-
-                          <div className="flex gap-2">
-                            <Button
-                              type="button"
-                              onClick={() => handleCancelOrder(order)}
-                              disabled={isPending}
-                              className="flex-1 py-2 text-sm bg-muted hover:bg-muted rounded-lg transition-colors disabled:opacity-50"
-                            >
-                              Cancel
-                            </Button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              )}
-
-              {/* Order History */}
-              {orders.filter(
-                (o) => o.status === "filled" || o.status === "cancelled",
-              ).length > 0 && (
-                <div className="mt-5">
-                  <h3 className="text-sm font-medium mb-2 text-muted-foreground">
-                    History
-                  </h3>
-                  <div className="space-y-2">
-                    {orders
-                      .filter(
-                        (o) =>
-                          o.status !== "pending" && o.status !== "triggered",
-                      )
-                      .slice(-5)
-                      .map((order) => (
-                        <div
-                          key={order.id}
-                          className="flex justify-between items-center p-2.5 bg-background rounded-lg text-xs"
-                        >
-                          <span className="text-muted-foreground">
-                            {order.type} {order.side} {order.quantity}{" "}
-                            {order.pair.replace("_", "/")}
-                          </span>
-                          <span
-                            className={`${
-                              order.status === "filled"
-                                ? "text-chart-2"
-                                : "text-muted-foreground"
-                            }`}
-                          >
-                            {order.status === "filled" ? "Filled" : "Cancelled"}
-                          </span>
-                        </div>
-                      ))}
+                        ))}
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Activity Log */}
-          <div className="lg:col-span-4">
-            <div className="bg-muted/50 rounded-lg p-4 sm:p-5 border border-border">
-              <h2 className="text-base font-semibold text-muted-foreground mb-4">
-                Activity Log
-              </h2>
-              <div className="bg-background rounded-lg p-3 h-80 overflow-y-auto font-mono text-xs">
-                {logs.length === 0 ? (
-                  <p className="text-muted-foreground">No activity yet...</p>
-                ) : (
-                  logs.map((log, i) => (
-                    <p key={i} className="text-muted-foreground mb-2 break-all">
-                      {log}
-                    </p>
-                  ))
                 )}
               </div>
             </div>
-          </div>
-        </div>
 
-        {/* Info Card */}
-        <div className="mt-8 bg-primary/5 border border-primary/20 rounded-lg p-5 sm:p-6">
-          <h3 className="font-semibold text-primary text-base mb-4">
-            How DeepBook Limit Orders Work
-          </h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-            <div className="bg-muted/50 rounded-xl p-5 border border-border">
-              <div className="text-base text-primary font-semibold mb-3">
-                1. Create Balance Manager
+            {/* Activity Log */}
+            <div className="lg:col-span-4">
+              <div className="bg-muted/50 rounded-lg p-4 sm:p-5 border border-border">
+                <h2 className="text-base font-semibold text-muted-foreground mb-4">
+                  Activity Log
+                </h2>
+                <div className="bg-background rounded-lg p-3 h-80 overflow-y-auto font-mono text-xs">
+                  {logs.length === 0 ? (
+                    <p className="text-muted-foreground">No activity yet...</p>
+                  ) : (
+                    logs.map((log, i) => (
+                      <p
+                        key={i}
+                        className="text-muted-foreground mb-2 break-all"
+                      >
+                        {log}
+                      </p>
+                    ))
+                  )}
+                </div>
               </div>
-              <p className="text-muted-foreground text-sm">
-                Balance Manager holds your trading funds securely on-chain
-              </p>
             </div>
-            <div className="bg-muted/50 rounded-xl p-5 border border-border">
-              <div className="text-base text-primary font-semibold mb-3">
-                2. Deposit Funds
+          </div>
+
+          {/* Info Card */}
+          <div className="mt-8 bg-primary/5 border border-primary/20 rounded-lg p-5 sm:p-6">
+            <h3 className="font-semibold text-primary text-base mb-4">
+              How DeepBook Limit Orders Work
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+              <div className="bg-muted/50 rounded-xl p-5 border border-border">
+                <div className="text-base text-primary font-semibold mb-3">
+                  1. Create Balance Manager
+                </div>
+                <p className="text-muted-foreground text-sm">
+                  Balance Manager holds your trading funds securely on-chain
+                </p>
               </div>
-              <p className="text-muted-foreground text-sm">
-                Deposit SUI, DEEP, or USDC to trade on DeepBook pools
-              </p>
-            </div>
-            <div className="bg-muted/50 rounded-xl p-5 border border-border">
-              <div className="text-base text-primary font-semibold mb-3">
-                3. Place Order
+              <div className="bg-muted/50 rounded-xl p-5 border border-border">
+                <div className="text-base text-primary font-semibold mb-3">
+                  2. Deposit Funds
+                </div>
+                <p className="text-muted-foreground text-sm">
+                  Deposit SUI, DEEP, or USDC to trade on DeepBook pools
+                </p>
               </div>
-              <p className="text-muted-foreground text-sm">
-                Submit limit order with price and quantity - stored on-chain
-              </p>
-            </div>
-            <div className="bg-muted/50 rounded-xl p-5 border border-border">
-              <div className="text-base text-primary font-semibold mb-3">
-                4. Auto-Execution
+              <div className="bg-muted/50 rounded-xl p-5 border border-border">
+                <div className="text-base text-primary font-semibold mb-3">
+                  3. Place Order
+                </div>
+                <p className="text-muted-foreground text-sm">
+                  Submit limit order with price and quantity - stored on-chain
+                </p>
               </div>
-              <p className="text-muted-foreground text-sm">
-                Orders execute automatically when market price matches
-              </p>
+              <div className="bg-muted/50 rounded-xl p-5 border border-border">
+                <div className="text-base text-primary font-semibold mb-3">
+                  4. Auto-Execution
+                </div>
+                <p className="text-muted-foreground text-sm">
+                  Orders execute automatically when market price matches
+                </p>
+              </div>
             </div>
           </div>
         </div>

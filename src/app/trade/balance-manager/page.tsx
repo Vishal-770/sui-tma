@@ -310,7 +310,7 @@ export default function BalanceManagerPage() {
     } finally {
       setLoading(false);
     }
-  }, [address, suiClient, deepBookConfig.PACKAGE_ID, selectedManagerIndex]);
+  }, [address, suiClient, deepBookConfig.PACKAGE_ID]);
 
   // Fetch user's token balances
   const fetchUserBalances = async () => {
@@ -860,68 +860,96 @@ export default function BalanceManagerPage() {
 
       {/* Sidebar */}
       <aside
-        className={`fixed left-0 top-0 h-screen bg-card border-r border-border transition-all duration-300 z-40 ${
-          sidebarOpen ? "w-full sm:w-80 lg:w-80" : "w-0"
+        className={`fixed left-0 top-0 h-screen  border-r border-border transition-all duration-300 z-40 ${
+          sidebarOpen ? "w-80 min-w-80" : "w-0"
         } overflow-hidden`}
       >
         <div className="h-full flex flex-col p-4 sm:p-6">
-          {/* Sidebar Header */}
-          <div className="flex items-center gap-2 mb-6">
-            <Wallet className="w-5 h-5 text-primary" />
-            <h2 className="font-semibold text-foreground">Balance Managers</h2>
-            <Badge variant="secondary">{balanceManagers.length}</Badge>
+          {/* Fixed Header */}
+          <div className="flex-shrink-0">
+            <div className="flex items-center gap-2 mb-6">
+              <Wallet className="w-5 h-5 text-primary" />
+              <h2 className="font-semibold text-foreground">
+                Balance Managers
+              </h2>
+              <Badge variant="secondary">{balanceManagers.length}</Badge>
+            </div>
+
+            <Separator className="mb-4" />
           </div>
 
-          <Separator className="mb-4" />
-
-          {/* Create New Balance Manager Button */}
-          <Button
-            onClick={handleCreateBalanceManager}
-            disabled={actionLoading === "create"}
-            className="w-full mb-4"
-            size="sm"
-          >
-            {actionLoading === "create" ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Creating Balance Manager {balanceManagers.length + 1}
-              </>
-            ) : (
-              <>
-                <Plus className="w-4 h-4 mr-2" />
-                New Balance Manager
-              </>
-            )}
-          </Button>
-
-          {/* Wallet Balances in Sidebar */}
-          {isAuthenticated && !loading && (
-            <div className="mb-4 p-3 bg-accent/10 rounded-lg border border-border">
-              <h3 className="text-xs font-semibold text-foreground mb-2 uppercase">
-                Wallet Balance
+          {/* Scrollable Content */}
+          <div className="flex-1 overflow-y-auto scrollbar-hide">
+            {/* Navigation Links */}
+            <div className="mb-4">
+              <h3 className="text-xs font-semibold text-foreground mb-3 uppercase tracking-wide">
+                Navigation
               </h3>
-              <div className="space-y-1.5">
-                {["SUI", "DEEP", "USDC"].map((token) => (
-                  <div
-                    key={token}
-                    className="flex items-center justify-between"
-                  >
-                    <span className="text-sm text-foreground font-medium">
-                      {token}
-                    </span>
-                    <span className="text-sm text-muted-foreground font-mono">
-                      {userBalances[token]
-                        ? parseFloat(userBalances[token]).toFixed(4)
-                        : "0.0000"}
-                    </span>
-                  </div>
-                ))}
+              <div className="space-y-1">
+                <Link
+                  href="/"
+                  className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 px-2 py-2 rounded-md transition-all duration-200 group"
+                >
+                  <div className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full group-hover:bg-primary transition-colors"></div>
+                  Home
+                </Link>
+                <Link
+                  href="/trade"
+                  className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 px-2 py-2 rounded-md transition-all duration-200 group"
+                >
+                  <TrendingUp className="w-4 h-4 text-muted-foreground/70 group-hover:text-primary transition-colors" />
+                  Trade
+                </Link>
               </div>
             </div>
-          )}
 
-          {/* Balance Managers List */}
-          <ScrollArea className="flex-1">
+            {/* Create New Balance Manager Button */}
+            <Button
+              onClick={handleCreateBalanceManager}
+              disabled={actionLoading === "create"}
+              className="w-full mb-4 min-w-32"
+              size="sm"
+            >
+              {actionLoading === "create" ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Creating Balance Manager {balanceManagers.length + 1}
+                </>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4 mr-2" />
+                  New Balance Manager
+                </>
+              )}
+            </Button>
+
+            {/* Wallet Balances in Sidebar */}
+            {isAuthenticated && !loading && (
+              <div className="mb-4">
+                <h3 className="text-xs font-semibold text-foreground mb-2 uppercase">
+                  Wallet Balance
+                </h3>
+                <div className="space-y-1.5">
+                  {["SUI", "DEEP", "USDC"].map((token) => (
+                    <div
+                      key={token}
+                      className="flex items-center justify-between"
+                    >
+                      <span className="text-sm text-foreground font-medium">
+                        {token}
+                      </span>
+                      <span className="text-sm text-muted-foreground font-mono">
+                        {userBalances[token]
+                          ? parseFloat(userBalances[token]).toFixed(4)
+                          : "0.0000"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Balance Managers List */}
             {loading ? (
               <div className="flex flex-col items-center justify-center py-12 space-y-3">
                 <Loader2 className="w-8 h-8 text-primary animate-spin" />
@@ -939,7 +967,7 @@ export default function BalanceManagerPage() {
                 </p>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2 mb-4">
                 {balanceManagers.map((manager, index) => (
                   <button
                     key={manager.objectId}
@@ -996,26 +1024,25 @@ export default function BalanceManagerPage() {
                 ))}
               </div>
             )}
-          </ScrollArea>
+            {/* How It Works Button */}
+            <div className="mt-4 pt-4 border-t border-border">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setHowItWorksOpen(true)}
+                className="w-full"
+              >
+                <Info className="w-4 h-4 mr-2" />
+                How It Works
+              </Button>
+            </div>
 
-          {/* How It Works Button */}
-          <div className="mt-4 pt-4 border-t border-border">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setHowItWorksOpen(true)}
-              className="w-full"
-            >
-              <Info className="w-4 h-4 mr-2" />
-              How It Works
-            </Button>
-          </div>
-
-          {/* Network Badge */}
-          <div className="mt-4 pt-4 border-t border-border">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Network</span>
-              <Badge variant="outline">{CURRENT_ENV}</Badge>
+            {/* Network Badge */}
+            <div className="mt-4 pt-4 border-t border-border">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Network</span>
+                <Badge variant="outline">{CURRENT_ENV}</Badge>
+              </div>
             </div>
           </div>
         </div>
@@ -1027,9 +1054,8 @@ export default function BalanceManagerPage() {
           sidebarOpen ? "lg:ml-80" : "ml-0"
         }`}
       >
-        {/* Sidebar Toggle Button - Always Visible */}
         <div className="sticky top-0 z-50 bg-background/80 backdrop-blur-sm border-b border-border">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-4">
+          <div className="px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-4">
             <div className="flex items-center gap-4">
               <Button
                 variant="outline"
@@ -1139,7 +1165,7 @@ export default function BalanceManagerPage() {
 
         <div className="p-4 sm:p-6 lg:p-8">
           {/* Header */}
-          <div className="max-w-6xl mx-auto mb-6 sm:mb-8">
+          <div className="mb-6 sm:mb-8">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
                 <p className="text-sm sm:text-base text-muted-foreground">
@@ -1151,7 +1177,7 @@ export default function BalanceManagerPage() {
                 size="sm"
                 onClick={() => fetchUserData()}
                 disabled={loading}
-                className="w-full sm:w-auto"
+                className="w-full sm:w-auto min-w-32"
               >
                 {loading ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -1166,64 +1192,58 @@ export default function BalanceManagerPage() {
           </div>
 
           {/* Error/Success Messages */}
-          <div className="max-w-6xl mx-auto space-y-4 mb-6">
+          <div className="space-y-4 mb-6">
             {error && (
-              <Card className="bg-destructive/10 border-destructive/30">
-                <CardContent className="p-4 flex items-start justify-between">
-                  <div className="flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 text-destructive mt-0.5" />
-                    <p className="text-destructive text-sm">{error}</p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setError(null)}
-                    className="h-8 w-8 p-0"
-                  >
-                    <X className="w-4 h-4" />
-                  </Button>
-                </CardContent>
-              </Card>
+              <div className="p-4 flex items-start justify-between">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-destructive mt-0.5" />
+                  <p className="text-destructive text-sm">{error}</p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setError(null)}
+                  className="h-8 w-8 p-0"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
             )}
             {success && (
-              <Card className="bg-primary/10 border-primary/30">
-                <CardContent className="p-4 flex items-start justify-between">
-                  <div className="flex items-start gap-3">
-                    <CheckCircle2 className="w-5 h-5 text-primary mt-0.5" />
-                    <p className="text-primary text-sm">{success}</p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setSuccess(null)}
-                    className="h-8 w-8 p-0"
-                  >
-                    <X className="w-4 h-4" />
-                  </Button>
-                </CardContent>
-              </Card>
+              <div className="p-4 flex items-start justify-between">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-primary mt-0.5" />
+                  <p className="text-primary text-sm">{success}</p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSuccess(null)}
+                  className="h-8 w-8 p-0"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
             )}
           </div>
 
           {/* Not Connected Warning */}
           {!isAuthenticated && (
-            <div className="max-w-6xl mx-auto">
-              <Card>
-                <CardContent className="p-12 text-center space-y-6">
-                  <div className="w-20 h-20 mx-auto bg-primary/10 rounded-full flex items-center justify-center">
-                    <Shield className="w-10 h-10 text-primary" />
-                  </div>
-                  <div className="space-y-2">
-                    <h3 className="text-2xl font-bold text-foreground">
-                      Connect Your Wallet
-                    </h3>
-                    <p className="text-muted-foreground">
-                      Please connect your wallet to access Balance Manager
-                      features
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
+            <div>
+              <div className="p-12 text-center space-y-6">
+                <div className="w-20 h-20 mx-auto bg-primary/10 rounded-full flex items-center justify-center">
+                  <Shield className="w-10 h-10 text-primary" />
+                </div>
+                <div className="space-y-2">
+                  <h3 className="text-2xl font-bold text-foreground">
+                    Connect Your Wallet
+                  </h3>
+                  <p className="text-muted-foreground">
+                    Please connect your wallet to access Balance Manager
+                    features
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1238,10 +1258,10 @@ export default function BalanceManagerPage() {
           )}
 
           {isAuthenticated && !loading && (
-            <div className="space-y-6 max-w-6xl mx-auto">
+            <div className="space-y-6">
               {/* Balance Manager Section */}
-              <Card className="border-border">
-                <CardContent className="pt-4 sm:pt-6">
+              <div>
+                <div className="pt-4 sm:pt-6 px-4 sm:px-6 lg:px-8">
                   {!balanceManager ? (
                     <div className="text-center py-12 space-y-6">
                       <div className="w-20 h-20 mx-auto bg-primary/10 rounded-full flex items-center justify-center">
@@ -1304,24 +1324,24 @@ export default function BalanceManagerPage() {
                       </div>
 
                       {/* Balance Manager Assets Card */}
-                      <Card className="bg-accent/10 border-border">
-                        <CardHeader className="pb-3">
-                          <CardTitle className="text-base flex items-center gap-2">
+                      <div>
+                        <div className="pb-3 px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6">
+                          <h3 className="text-base flex items-center gap-2 font-semibold">
                             <Wallet className="w-4 h-4 text-primary" />
                             Balance Manager Assets
-                          </CardTitle>
-                          <CardDescription className="text-xs">
+                          </h3>
+                          <p className="text-xs text-muted-foreground mt-1">
                             Tokens deposited in this Balance Manager
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent>
+                          </p>
+                        </div>
+                        <div className="px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6">
                           {balanceManager.balances &&
                           balanceManager.balances.length > 0 ? (
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                               {balanceManager.balances.map((balance) => (
                                 <div
                                   key={balance.symbol}
-                                  className="p-3 rounded-lg bg-background border border-border"
+                                  className="p-3 rounded-lg"
                                 >
                                   <div className="flex items-center justify-between">
                                     <span className="text-sm text-muted-foreground font-medium">
@@ -1353,8 +1373,8 @@ export default function BalanceManagerPage() {
                               </p>
                             </div>
                           )}
-                        </CardContent>
-                      </Card>
+                        </div>
+                      </div>
 
                       {/* Deposit/Withdraw Section */}
                       <Tabs defaultValue="deposit" className="w-full">
@@ -1410,7 +1430,7 @@ export default function BalanceManagerPage() {
                             <Button
                               onClick={handleDeposit}
                               disabled={actionLoading === "deposit"}
-                              className="w-full h-12"
+                              className="w-full h-12 min-w-32"
                             >
                               {actionLoading === "deposit" ? (
                                 <span className="flex items-center gap-2">
@@ -1468,7 +1488,7 @@ export default function BalanceManagerPage() {
                               onClick={handleWithdraw}
                               disabled={actionLoading === "withdraw"}
                               variant="destructive"
-                              className="w-full h-12"
+                              className="w-full h-12 min-w-32"
                             >
                               {actionLoading === "withdraw" ? (
                                 <span className="flex items-center gap-2">
@@ -1487,26 +1507,26 @@ export default function BalanceManagerPage() {
                       </Tabs>
                     </div>
                   )}
-                </CardContent>
-              </Card>
+                </div>
+              </div>
 
               {/* Trade Caps Section */}
               {balanceManager && (
-                <Card className="border-border">
-                  <CardHeader className="space-y-1">
-                    <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                <div>
+                  <div className="space-y-1 px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6">
+                    <h3 className="flex items-center gap-2 text-lg sm:text-xl font-semibold">
                       <Ticket className="w-5 h-5 text-accent" />
                       Trade Caps
-                    </CardTitle>
-                    <CardDescription className="text-sm">
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
                       Manage trading permissions for your Balance Manager. Mint
                       TradeCaps and assign them to traders, or revoke access
                       when needed.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-6">
+                    </p>
+                  </div>
+                  <div className="space-y-6 px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6">
                     {/* Explanation of TradeCap workflow */}
-                    <div className="p-3 bg-muted border border-border rounded-lg">
+                    <div className="p-3">
                       <p className="text-sm text-muted-foreground">
                         <Info className="w-4 h-4 inline mr-1" />
                         <strong>How TradeCaps work:</strong> Mint a cap for a
@@ -1517,7 +1537,7 @@ export default function BalanceManagerPage() {
                     </div>
 
                     {/* Note about current limitations */}
-                    <div className="p-3 bg-muted border border-border rounded-lg">
+                    <div className="p-3">
                       <p className="text-sm text-muted-foreground">
                         <Info className="w-4 h-4 inline mr-1" />
                         Currently showing TradeCaps owned by you. TradeCaps
@@ -1536,7 +1556,7 @@ export default function BalanceManagerPage() {
                           {tradeCaps.map((cap) => (
                             <div
                               key={cap.objectId}
-                              className="p-4 bg-card rounded-lg border border-border hover:border-primary hover:bg-accent/50 transition-all duration-200 shadow-sm"
+                              className="p-4 rounded-lg transition-all duration-200"
                             >
                               <div className="flex justify-between items-start">
                                 <div className="flex-1">
@@ -1590,7 +1610,7 @@ export default function BalanceManagerPage() {
                     )}
 
                     {/* Mint New Trade Cap */}
-                    <div className="p-4 rounded-lg border border-border space-y-4">
+                    <div className="p-4 space-y-4">
                       <h3 className="text-foreground font-semibold flex items-center gap-2">
                         <Plus className="w-5 h-5 text-primary" />
                         Mint New Trade Cap
@@ -1616,7 +1636,7 @@ export default function BalanceManagerPage() {
                             onClick={() => handleMintTradeCap(false)}
                             disabled={actionLoading === "mintCap"}
                             variant="secondary"
-                            className="w-full sm:w-auto"
+                            className="w-full sm:w-auto min-w-32"
                           >
                             {actionLoading === "mintCap" ? (
                               <Loader2 className="w-5 h-5 animate-spin" />
@@ -1627,7 +1647,7 @@ export default function BalanceManagerPage() {
                         </div>
 
                         {/* Assign to Trader Section */}
-                        <div className="pt-3 border-t border-border">
+                        <div className="pt-3">
                           <h4 className="text-sm font-medium text-foreground mb-2">
                             Or assign directly to a trader:
                           </h4>
@@ -1646,7 +1666,7 @@ export default function BalanceManagerPage() {
                                 !traderAddress.trim()
                               }
                               variant="default"
-                              className="w-full sm:w-auto"
+                              className="w-full sm:w-auto min-w-32"
                             >
                               {actionLoading === "assignCap" ? (
                                 <Loader2 className="w-5 h-5 animate-spin" />
@@ -1658,8 +1678,8 @@ export default function BalanceManagerPage() {
                         </div>
                       </div>
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -1713,7 +1733,7 @@ export default function BalanceManagerPage() {
                   className="flex gap-4 p-4 rounded-lg border border-border hover:border-primary hover:bg-accent/50 transition-all group"
                 >
                   <div className="shrink-0">
-                    <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
+                    <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center transition-all">
                       <item.icon className="w-6 h-6 text-primary" />
                     </div>
                   </div>
@@ -1752,7 +1772,7 @@ export default function BalanceManagerPage() {
                   <a
                     key={item.label}
                     href={item.href}
-                    className="p-4 bg-primary text-primary-foreground rounded-lg font-semibold text-center hover:scale-105 hover:bg-primary/90 transition-all shadow"
+                    className="p-4 bg-primary text-primary-foreground rounded-lg font-semibold text-center hover:bg-primary/90 transition-all shadow"
                     onClick={() => setHowItWorksOpen(false)}
                   >
                     {item.label}
